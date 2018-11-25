@@ -2656,15 +2656,15 @@ disableIPV6 # ok
 
 disableNetworkServices # ok
 
-setTCPSettings
+setTCPSettings # ok
 
-setTimeServer
+setTimeServer # ok
 
-setAllLocalNames
+setAllLocalNames # ok
 
-setPowerSaveSettings
+setPowerSaveSettings # ok
 
-setPrinterSettings
+setPrinterSettings # ok
 
 enableARD
 
@@ -2698,3 +2698,5 @@ disableWhatsNewNotification
 
 setAppleLoginWindowSettings # ok
 EOF
+
+enableARD
