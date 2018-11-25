@@ -300,7 +300,7 @@ declare -r UserHome="$(readDS --account="${UserName}" --key="NFSHomeDirectory")"
 LoggedInUser=$(scutil <<< "show State:/Users/ConsoleUser" | awk -F': ' '/[[:space:]]+Name[[:space:]]:/ { if ( $2 != "loginwindow" ) { print $2 }}')
 # login name
 LoginName="$(id -p | awk -F'	' '/^login/ { print $2 }')"
-if [ -z "${LoginName}" ]; then
+if [[ -z "${LoginName}" ]]; then
 	LoginName="${UserName}"
 	# login id
 	declare -i LoginId="${UserId}"
@@ -322,7 +322,7 @@ else
     LaunchAsUserWithChroot="${LaunchAsUser} chroot -u ${LoginId} -g ${LoginPrimaryGroupId} /"
 	fi
 fi
-declare -r LoginName LoginId LoginPrimaryGroupId LoginHome LaunchAsUser
+declare -r LoginName LoginId LoginPrimaryGroupId LoginHome LaunchAsUser LaunchAsUserWithChroot
 # case $(ps -o state= -p ${$}) in
 if [ -t 0 ]; then
 		# interactive shell (not started from launch daemon)
@@ -331,16 +331,20 @@ else
 		# background shell
 		declare -ri Background=${YES}
 fi
+# hidden users (typically the same as LocalAdminUsers)
+declare -a HiddenUsers
+HiddenUsers=( "${LocalAdminUsers[@]}" )
+declare -r HiddenUsers
 # time zone
 declare -r TimeZone="Europe/Vienna"
 # internal timeserver
 declare -a TimeServersInt
-TimeServersInt+=( "ntp1.premedia.at" )
+TimeServersInt+=( "ntp1.premedia.at" ) # the first entry is the preferred time server
 TimeServersInt+=( "ntp2.premedia.at" )
 declare -r TimeServersInt
 # external timeserver
 declare -a TimeServersExt
-TimeServersExt+=( "time.euro.apple.com" )
+TimeServersExt+=( "time.euro.apple.com" ) # the first entry is the preferred time server
 TimeServersExt+=( "time.apple.com" )
 declare -r TimeServersExt
 # network services to turn off (regex)
@@ -351,10 +355,6 @@ ShutdownNetworkServices+=( "Bluetooth DUN" )
 ShutdownNetworkServices+=( "Bluetooth PAN" )
 ShutdownNetworkServices+=( "Thunderbolt Bridge" )
 declare -r ShutdownNetworkServices
-# hidden users (typically the same as LocalAdminUsers)
-declare -a HiddenUsers
-HiddenUsers=( "${LocalAdminUsers[@]}" )
-declare -r HiddenUsers
 # sysctl.conf options
 declare -a SysCtlOptions
 SysCtlOptions+=( "kern.ipc.somaxconn=2048" )
@@ -470,21 +470,31 @@ setTCPSettings() {
 
   echo "INFO${DELIMITER}Set TCP settings ... "
   echo -n "Configure ${SysctlConfFQFN} ... "
+
+  if [[ ! -s "${SysctlConfFQFN}" ]]; then
+    echo -n "Create '${SysctlConfFQFN}' ... "
+    RV="$(echo "# Generated through ${ScriptFN} at ${TimeStamp}" >"${SysctlConfFQFN}" 2>&1)"; RC=${?}
+    if ((RC == SUCCESS)); then
+      echo -n "ok, "
+    else
+      echo -e "ERROR${DELIMITER}echo '# Generated through ${ScriptFN} at ${TimeStamp}' >'${SysctlConfFQFN}' failed${DELIMITER}RC=${RC}${DELIMITER}RV=${RV}"
+      EC=$((EC||RC))
+    fi
+  fi
+
   for ((Idx=0; Idx < ${#SysCtlOptions[@]}; Idx++)); do
     while IFS="=" read SysctlOption SysctlValue; do
-      if ((Idx > 0)); then
-        echo -n ", "
-      fi
+      ((Idx > 0)) && echo -n ", "
       echo -n "Write ${SysctlOption} ... "
       RV="$(sed -i '' -E '
             /^.*'"${SysctlOption}"'[[:space:]]*=[[:space:]]*.*$/ {
               h
-              s/^(.*)('"${SysctlOption}"'[[:space:]]*=[[:space:]]*).*$/\2'"${SysctlValue}"'/
+              s/^(.*)('"${SysctlOption}"')([[:space:]]*)(=)([[:space:]]*)(.*)$/\2\4'"${SysctlValue}"$'\t# modified through '"${ScriptFN}"' at '"${TimeStamp}"'/
               }
             $ {
               x
               /^$/ {
-                s//'"${SysctlOption}"'='"${SysctlValue}"'/
+                s//'"${SysctlOption}"'='"${SysctlValue}"$'\t# added through '"${ScriptFN}"' at '"${TimeStamp}"'/
                 H
               }
               x
@@ -514,7 +524,6 @@ disableNetworkServices() {
   local RV
 
   echo "INFO${DELIMITER}Shutdown network services ... "
-#  while read NetworkService; do
   for ((Idx=0; Idx < ${#ShutdownNetworkServices[@]}; Idx++)); do
     while read NetworkService; do
       ((++Idx > 1)) && echo -n ", "
@@ -530,9 +539,6 @@ disableNetworkServices() {
     done < <(echo "${ShutdownNetworkServices[${Idx}]}" |\
              egrep -v "^\*")
   done
-#  done <<<"${ShutdownNetworkServices[${Idx}]}"
-#  done < <(networksetup -listallnetworkservices |\
-#           egrep "^([^\*])?${ShutdownNetworkServices}")
 
   if ((DisabledNetworkServices == SUCCESS)); then
     echo -n "No unnecessary network service found"
@@ -552,7 +558,7 @@ disableIPV6() {
   local -i EC=0
   local RV
 
-  echo "INFO${DELIMITER}Disable IPv6 ... "
+  echo "INFO${DELIMITER}Disable IPv6 for all network services ... "
   while IFS= read NetworkService; do
     ((++Idx > 1)) && echo -n ", "
     echo -n "disable IPv6 for '${NetworkService}' ... "
