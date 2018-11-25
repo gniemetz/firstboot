@@ -652,7 +652,7 @@ setTimeServer() {
 
   echo -n ", set date from '${TimeServers[0]}' ... "
 
-  case ${OsVersion[1]} in
+  case ${OSVERSION[1]} in
     1[2-4])
       if [[ ! -d "${NtpKodFQPN}" ]]; then
         RV="$(mkdir -p "${NtpKodFQPN}" 2>&1)"; RC=${?}
@@ -666,16 +666,15 @@ setTimeServer() {
       if [[ ! -f "${NtpKodFQFN}" ]]; then
         RV="$(touch "${NtpKodFQFN}" 2>&1)"; RC=${?}
         if ((RC == SUCCESS)); then
-          echo -n "ok"
+          RV="$(chmod 666 "${NtpKodFQFN}" 2>&1)"; RC=${?}
+          if ((RC == SUCCESS)); then
+            echo -n "ok"
+          else
+            echo -e "ERROR${DELIMITER}chmod 666 '${NtpKodFQFN}' failed${DELIMITER}RC=${RC}${DELIMITER}RV=${RV}"
+            EC=$((EC||RC))
+          fi
         else
           echo -e "ERROR${DELIMITER}touch '${NtpKodFQFN}' failed${DELIMITER}RC=${RC}${DELIMITER}RV=${RV}"
-          EC=$((EC||RC))
-        fi
-        RV="$(chmod 666 "${NtpKodFQFN}" 2>&1)"; RC=${?}
-        if ((RC == SUCCESS)); then
-          echo -n "ok"
-        else
-          echo -e "ERROR${DELIMITER}chmod 666 '${NtpKodFQFN}' failed${DELIMITER}RC=${RC}${DELIMITER}RV=${RV}"
           EC=$((EC||RC))
         fi
       fi
@@ -690,16 +689,15 @@ setTimeServer() {
     11)
       RV="$(sntp -s -- "${TimeServers[0]}" 2>&1)"; RC=${?}
       if ((RC == SUCCESS)); then
-        echo -n "ok"
+        RV="$(sntp -j -- "${TimeServers[0]}" 2>&1)"; RC=${?}
+        if ((RC == SUCCESS)); then
+          echo -n "ok"
+        else
+          echo -e "ERROR${DELIMITER}sntp -j -- '${TimeServers[0]}' failed${DELIMITER}RC=${RC}${DELIMITER}RV=${RV}"
+          EC=$((EC||RC))
+        fi
       else
         echo -e "ERROR${DELIMITER}sntp -s -- '${TimeServers[0]}' failed${DELIMITER}RC=${RC}${DELIMITER}RV=${RV}"
-        EC=$((EC||RC))
-      fi
-      RV="$(sntp -j -- "${TimeServers[0]}" 2>&1)"; RC=${?}
-      if ((RC == SUCCESS)); then
-        echo -n "ok"
-      else
-        echo -e "ERROR${DELIMITER}sntp -j -- '${TimeServers[0]}' failed${DELIMITER}RC=${RC}${DELIMITER}RV=${RV}"
         EC=$((EC||RC))
       fi
       ;;
@@ -740,42 +738,28 @@ setAllLocalNames() {
   # LocalHostName ... is the name identifier used by Bonjour and visible through file-sharing
   #                   services like Airdrop
   # sudo defaults write /Library/Preferences/SystemConfiguration/com.apple.smb.server NetBIOSName -string "$MY_NAME"
+  local Name=""
   local AdjustedComputerName="$(echo "${ComputerName}" |\
                                 awk '{ gsub(/_/, "-"); printf("%s", tolower($0)) }')"
   local NetBIOSName="$(echo "${AdjustedComputerName}" |\
-                       awk '{ printf("%s%d", toupper(substr($1, 1, 14)), 1) }')"
+                       awk '{ printf("%s%s", toupper(substr($1, 1, 14)), (length($1) > 14 ? "1" : "")) }')"
   local SmbServerPlistFQFN="${TargetVolume}${PrefsRPN}/SystemConfiguration/com.apple.smb.server.plist"
   local -i RC=0
   local -i EC=0
   local RV=""
 
   echo "INFO${DELIMITER}Set all names"
-  echo -n "Setting ComputerName ... "
-  RV="$(scutil --set ComputerName "${AdjustedComputerName}" 2>&1)"; RC=${?}
-  if ((RC == SUCCESS)); then
-    echo -n "ok, "
-  else
-    echo -e "ERROR${DELIMITER}scutil --set ComputerName '${AdjustedComputerName}' failed${DELIMITER}RC=${RC}${DELIMITER}RV=${RV}"
-    EC=$((EC||RC))
-  fi
 
-  echo -n "Setting HostName ... "
-  RV="$(scutil --set HostName "${AdjustedComputerName}" 2>&1)"; RC=${?}
-  if ((RC == SUCCESS)); then
-    echo -n "ok, "
-  else
-    echo -e "ERROR${DELIMITER}scutil --set HostName '${AdjustedComputerName}' failed${DELIMITER}RC=${RC}${DELIMITER}RV=${RV}"
-    EC=$((EC||RC))
-  fi
-
-  echo -n "Setting LocalHostName ... "
-  RV="$(scutil --set LocalHostName "${AdjustedComputerName}" 2>&1)"; RC=${?}
-  if ((RC == SUCCESS)); then
-    echo -n "ok, "
-  else
-    echo -e "ERROR${DELIMITER}scutil --set LocalHostName '${AdjustedComputerName}' failed${DELIMITER}RC=${RC}${DELIMITER}RV=${RV}"
-    EC=$((EC||RC))
-  fi
+  for Name in ComputerName LocalHostName HostName; do
+    echo -n "Setting ${Name} ... "
+    RV="$(scutil --set ${Name} "${AdjustedComputerName}" 2>&1)"; RC=${?}
+    if ((RC == SUCCESS)); then
+      echo -n "ok, "
+    else
+      echo -e "ERROR${DELIMITER}scutil --set HostName '${AdjustedComputerName}' failed${DELIMITER}RC=${RC}${DELIMITER}RV=${RV}"
+      EC=$((EC||RC))
+    fi
+  done
 
   echo -n "Setting NetBIOSName ... "
   RV="$(defaults write "${SmbServerPlistFQFN}" NetBIOSName -string "${NetBIOSName}" 2>&1)"; RC=${?}
@@ -841,14 +825,14 @@ setPrinterSettings() {
 
   echo -n "Disable PreserveJobFiles ... "
   RV="$(sed -i '' -E '
-        /^PreserveJobFiles[[:space:]]+.*$/ {
+        /^.*PreserveJobFiles[[:space:]]+.*$/ {
           h
-          s/^(PreserveJobFiles[[:space:]]+).*$/\1No/
+          s/^(.*)(PreserveJobFiles[[:space:]]+).*$/\2No'$'\t# modified through '"${ScriptFN}"' at '"${TimeStamp}"'/
           }
         $ {
           x
           /^$/ {
-            s//PreserveJobFiles No/
+            s//PreserveJobFiles No'$'\t# added through '"${ScriptFN}"' at '"${TimeStamp}"'/
             H
             }
           x
@@ -2714,5 +2698,3 @@ disableWhatsNewNotification
 
 setAppleLoginWindowSettings # ok
 EOF
-
-disableNetworkServices
