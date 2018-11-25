@@ -1,5 +1,12 @@
 #!/bin/bash
-# do not edit
+declare -r ScriptLastMod="2018-11-25"
+declare -r ScriptVersion="0.1"
+# check if root
+if ((EUID != 0)); then
+  echo "ERROR${DELIMITER}Must run as root user"
+  exit 1
+fi
+
 PathToScript="${0}"
 PathToPackage="${1}"
 TargetLocation="${2}" # eg /Applications
@@ -7,16 +14,6 @@ TargetVolume="${3}" # eg /Volumes/Macintosh HD
 TargetVolume="${TargetVolume:+${TargetVolume/%\//}}"
 if [[ -z "${TargetVolume}" || "${TargetVolume: -1}" != "/" ]]; then
   TargetVolume="${TargetVolume}/"
-fi
-# PS4
-DEBUG=""
-PS4='+(${BASH_SOURCE}:${LINENO}): ${FUNCNAME[0]:+${FUNCNAME[0]}(): }'
-# delimiter
-declare -r DELIMITER=$'|'
-# check if root
-if ((EUID != 0)); then
-  echo "ERROR${DELIMITER}Must run as root user"
-  exit 1
 fi
 
 # yes/no success/error true/false found/missing
@@ -28,20 +25,18 @@ declare -ri NO=1
 declare -ri ERROR=${NO}
 declare -ri FALSE=${NO}
 declare -ri MISSING=${NO}
-# global preferences file
-declare -r GlobalPreferencesFN=".GlobalPreferences.plist"
-# preferences relative path name
-declare -r PrefsRPN="Library/Preferences"
-# application support relative path name
-declare -r AppSuRPN="Library/Application Support"
-# users dir
-declare -r UsersFQPN="${TargetVolume}Users"
-# temp directory
-declare -r TempFQPN="${TargetVolume}private/var/tmp"
-# user template
-declare -r UserTemplateFQPN="${TargetVolume}System/Library/User Template"
-# sysctl.conf
-declare -r SysctlConfFQFN="${TargetVolume}etc/sysctl.conf"
+# delimiter
+declare -r DELIMITER=$'|'
+# debug script?
+declare -r DEBUG=${TRUE}
+if ((DEBUG == TRUE)); then
+  # PS4
+	PS4='+(${BASH_SOURCE:-}:${LINENO:-}): ${FUNCNAME[0]:+${FUNCNAME[0]:-}(): }'
+	set -xv
+else
+  :
+  #set +xv
+fi
 # return code
 declare -i RC=0
 # return value
@@ -60,6 +55,7 @@ alias defaults="${TargetVolume}usr/bin/defaults"
 alias dscl="${TargetVolume}usr/bin/dscl"
 alias egrep="${TargetVolume}usr/bin/egrep"
 alias find="${TargetVolume}usr/bin/find"
+alias id="${TargetVolume}usr/bin/id"
 alias ioreg="${TargetVolume}usr/sbin/ioreg"
 alias kickstart="${TargetVolume}System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart"
 alias launchctl="${TargetVolume}bin/launchctl"
@@ -82,20 +78,47 @@ alias systemsetup="${TargetVolume}usr/sbin/systemsetup"
 alias touch="${TargetVolume}usr/bin/touch"
 alias touristd="${TargetVolume}System/Library/PrivateFrameworks/Tourist.framework/Versions/A/Resources/touristd"
 alias tr="${TargetVolume}usr/bin/tr"
+alias which="${TargetVolume}usr/bin/which"
 alias xmllint="${TargetVolume}usr/bin/xmllint"
+
+# script path name
+ScriptPN="${0%/*}"
+if [ "${ScriptPN}" = "." ]; then
+	ScriptPN="${PWD}"
+elif [ "${ScriptPN:0:1}" != "/" ]; then
+	ScriptPN="$(which ${0})"
+fi
+# script filename
+declare -r ScriptFN="${0##*/}"
+# script name
+ScriptName="${ScriptFN%.*}"
+# script extension
+ScriptExtension=${ScriptFN##*.}
+if [ "${ScriptName}" = "" ]; then
+	ScriptName=".${ScriptExtension}"
+	ScriptExtension=""
+fi
+declare -r ScriptPN ScriptName ScriptExtension
+# global preferences file
+declare -r GlobalPreferencesFN=".GlobalPreferences.plist"
+# preferences relative path name
+declare -r PrefsRPN="Library/Preferences"
+# application support relative path name
+declare -r AppSuRPN="Library/Application Support"
+# users dir
+declare -r UsersFQPN="${TargetVolume}Users"
+# temp directory
+declare -r TempFQPN="${TargetVolume}private/var/tmp"
+# user template
+declare -r UserTemplateFQPN="${TargetVolume}System/Library/User Template"
+# sysctl.conf
+declare -r SysctlConfFQFN="${TargetVolume}etc/sysctl.conf"
 # date in seconds
 declare -ir StartDateInSeconds=$(date +'%s')
 # computer name
 declare -r ComputerName="$(scutil --get ComputerName)"
 # model identifier
-declare ModelIdentifier="$(system_profiler SPHardwareDataType 2>&1 |\
-                           awk -F': ' '
-                             /Model Identifier/ {
-                               print $2
-                             }
-                           ')"
-if [[ -z "${ModelIdentifier}" ]]; then
-  declare ModelIdentifier="$(ioreg \
+declare -r ModelIdentifier="$(ioreg \
                                -c IOPlatformExpertDevice \
                                -d 2 2>&1 |\
                              awk -F'"' '
@@ -103,17 +126,8 @@ if [[ -z "${ModelIdentifier}" ]]; then
                                  print $(NF-1)
                                }
                              ')"
-fi
-declare -r ModelIdentifier
 # Hardware UUID
-declare HWUUID="$(system_profiler SPHardwareDataType |\
-                     awk '
-                       /Hardware UUID/ {
-                         print $NF
-                         }
-                       ')"
-if [[ -z "${HWUUID}" ]]; then
- declare HWUUID="$(ioreg \
+declare -r HwUUID="$(ioreg \
                      -c IOPlatformExpertDevice \
                      -d 2 2>&1 |\
                    awk -F'"' '
@@ -121,17 +135,8 @@ if [[ -z "${HWUUID}" ]]; then
                        print $(NF-1)
                      }
                    ')"
-fi
-declare -r HWUUID
 # serial number
-declare SerialNumber="$(system_profiler SPHardwareDataType |\
-                     awk '
-                       /Serial Number/ {
-                         print $NF
-                         }
-                       ')"
-if [[ -z "${SerialNumber}" ]]; then
- declare SerialNumber="$(ioreg \
+declare -r SerialNumber="$(ioreg \
                            -c IOPlatformExpertDevice \
                            -d 2 2>&1 |\
                          awk -F'"' '
@@ -139,31 +144,25 @@ if [[ -z "${SerialNumber}" ]]; then
                              print $(NF-1)
                            }
                          ')"
-fi
-declare -r SerialNumber
 # os x product version
-declare PRODUCTVERSION="$(sw_vers -productVersion)"
-if [[ -z "${PRODUCTVERSION}" ]]; then
-  PRODUCTVERSION="$(defaults read /System/Library/CoreServices/SystemVersion.plist ProductVersion 2>&1)"
-fi
-declare -r PRODUCTVERSION
-declare -i SystemVersionStampAsNumber=0
-for Number in $(echo "${PRODUCTVERSION}.0.0.0.0" |\
+declare -r OsProductVersion="$(defaults read /System/Library/CoreServices/SystemVersion.plist ProductVersion 2>&1)"
+declare -i OsSystemVersionStampAsNumber=0
+for Number in $(echo "${OsProductVersion}.0.0.0.0" |\
              awk -F'.' 'BEGIN { OFS="\n" } { print $1,$2,$3,$4 }'); do
-  SystemVersionStampAsNumber=$((SystemVersionStampAsNumber * 256 + Number))
+  OsSystemVersionStampAsNumber=$((OsSystemVersionStampAsNumber * 256 + Number))
 done
-declare -r SystemVersionStampAsNumber
+declare -r OsSystemVersionStampAsNumber
 # os x build version
-declare BUILDVERSION="$(sw_vers -buildVersion)"
-if [[ -z "${BUILDVERSION}" ]]; then
-  BUILDVERSION="$(defaults read /System/Library/CoreServices/SystemVersion.plist ProductBuildVersion 2>&1)"
+declare OsBuildVersion="$(sw_vers -buildVersion)"
+if [[ -z "${OsBuildVersion}" ]]; then
+  OsBuildVersion="$(defaults read /System/Library/CoreServices/SystemVersion.plist ProductBuildVersion 2>&1)"
 fi
-declare -r BUILDVERSION
+declare -r OsBuildVersion
 # Split build version (eg 14A379a) into parts (14,A,379,a)
-declare -i BuildMajorNumber=$(echo ${BUILDVERSION} | sed 's/[a-zA-Z][0-9]*//;s/[a-zA-Z]*$//')
-BuildMinorCharacter=$(echo ${BUILDVERSION} | sed 's/^[0-9]*//;s/[0-9]*[a-zA-Z]*$//')
-BuildRevisionNumber=$(echo ${BUILDVERSION} | sed 's/^[0-9]*[a-zA-Z]//;s/[a-zA-Z]*$//')
-BuildStageCharacter=$(echo ${BUILDVERSION} | sed 's/^[0-9]*[a-zA-Z][0-9]*//')
+declare -i BuildMajorNumber=$(echo ${OsBuildVersion} | sed 's/[a-zA-Z][0-9]*//;s/[a-zA-Z]*$//')
+BuildMinorCharacter=$(echo ${OsBuildVersion} | sed 's/^[0-9]*//;s/[0-9]*[a-zA-Z]*$//')
+BuildRevisionNumber=$(echo ${OsBuildVersion} | sed 's/^[0-9]*[a-zA-Z]//;s/[a-zA-Z]*$//')
+BuildStageCharacter=$(echo ${OsBuildVersion} | sed 's/^[0-9]*[a-zA-Z][0-9]*//')
 
 BuildMinorNumber=$(($(printf "%d" "'${BuildMinorCharacter}")-65))
 if [[ -n "${BuildStageCharacter}" ]]; then
@@ -171,16 +170,14 @@ if [[ -n "${BuildStageCharacter}" ]]; then
 else
   BuildStageNumber=0
 fi
-declare -r BuildVersionStampAsNumber=$((((BuildMajorNumber * 32 + BuildMinorNumber) * 2048 + BuildRevisionNumber) * 32 + BuildStageNumber))
+declare -r OsBuildVersionStampAsNumber=$((((BuildMajorNumber * 32 + BuildMinorNumber) * 2048 + BuildRevisionNumber) * 32 + BuildStageNumber))
 
 # os x version array major minor patch
-IFS='.' read -ra OSVERSION <<<"${PRODUCTVERSION}"
+IFS='.' read -ra OsVersion <<<"${OsProductVersion}"
 # os x version as integer
-declare -ir OSVERSION_INTEGER=10#$(printf '%02d%02d%02d' "${OSVERSION[0]:-0}" "${OSVERSION[1]:-0}" "${OSVERSION[2]:-0}")
+declare -ir IntegerOsVersion=10#$(printf '%02d%02d%02d' "${OsVersion[0]:-0}" "${OsVersion[1]:-0}" "${OsVersion[2]:-0}")
 # dscl prefix
 DsclPrefix="dscl"
-# logged in user
-LoggedInUser=$(scutil <<< "show State:/Users/ConsoleUser" | awk -F': ' '/[[:space:]]+Name[[:space:]]:/ { if ( $2 != "loginwindow" ) { print $2 }}')
 # local admin users
 declare -a LocalAdminUsers
 LocalAdminUsers+=( "ardadmin" )
@@ -200,7 +197,140 @@ LocalUsers=( $(printf "%s\n%s\n" "$( (set +o noglob && \
                                   sort -u) \
                                 )
 declare -r LocalUsers
-# set as you need
+# function for getting values from Directory Service via dscl
+readDS() {
+	local _Account _DSKey _DSValue
+	local _FS=":"
+
+	while :; do
+		case ${1} in
+			-a|--account)
+				if [[ -n "${2}" && "${2:0:2}" != "--" && "${2:0:1}" != "-" ]]; then
+					_Account="${2}"
+					shift
+				else
+					printf 'ERROR: "%s" requires a non-empty option argument.\n' "${1}" >&2
+					return ${ERROR}
+				fi
+				;;
+			--account=?*)
+				_Account=${1#*=} # Delete everything up to "=" and assign the remainder.
+				;;
+			--account=) # Handle the case of an empty --account=
+				printf 'ERROR: "%s" requires a non-empty option argument.\n' "${1}" >&2
+				return ${ERROR}
+				;;
+			-k|--key)
+				if [[ -n "${2}" && "${2:0:2}" != "--" && "${2:0:1}" != "-" ]]; then
+					_DSKey="${2}"
+					shift
+				else
+					printf 'ERROR: "%s" requires a non-empty option argument.\n' "${1}" >&2
+					return ${ERROR}
+				fi
+				;;
+			--key=?*)
+				_DSKey=${1#*=} # Delete everything up to "=" and assign the remainder.
+				;;
+			--key=) # Handle the case of an empty --key=
+				printf 'ERROR: "%s" requires a non-empty option argument.\n' "${1}" >&2
+				return ${ERROR}
+				;;
+			--) # End of all options.
+				shift
+				break
+				;;
+			-?*)
+				printf 'WARN: Unknown option (ignored): %s\n' "${1}" >&2
+				;;
+			*) # Default case: If no more options then break out of the loop.
+				break
+		esac
+		shift
+	done
+
+	if [ -n "${_Account}" ] && \
+  [ -n "${_DSKey}" ] && \
+  _DSValue="$(dscl . read /Users/"${_Account}" "${_DSKey}" |\
+							awk -F"${_FS}" \
+									-v DSKey="${_DSKey}" \
+							  '
+                BEGIN {
+									DSValue=""
+									DSKeyFound=0
+								}
+								function getValuesFromPosition(StartPosition) {
+									for(FieldNr=StartPosition; FieldNr <= NF; FieldNr++) {
+										DSValue = (DSValue == "" ? "" : DSValue FS) $FieldNr
+									}
+								}
+								DSKeyFound == 1 {
+									getValuesFromPosition(1)
+									DSKeyFound=0
+								}
+								$1 == DSKey {
+								  if (NF > 1) {
+								  	getValuesFromPosition(2)
+								  } else {
+								  	DSKeyFound=1
+									  next
+								  }
+								}
+								END {
+									# trim leading space
+									gsub(/^[[:space:]]+/, "", DSValue)
+									printf("%s", DSValue)
+								}
+                ')"; then
+		echo "${_DSValue}"
+		return ${SUCCESS}
+	else
+		return ${ERROR}
+	fi
+}
+# user name
+declare -r UserName="$(id -p | awk -F'	' '/^uid/ { print $2 }')"
+# user id
+declare -ir UserId="$(readDS --account="${UserName}" --key="UniqueID")"
+# user primary group id
+declare -ir UserPrimaryGroupId="$(readDS --account="${UserName}" --key="PrimaryGroupID")"
+# user home
+declare -r UserHome="$(readDS --account="${UserName}" --key="NFSHomeDirectory")"
+# logged in user
+LoggedInUser=$(scutil <<< "show State:/Users/ConsoleUser" | awk -F': ' '/[[:space:]]+Name[[:space:]]:/ { if ( $2 != "loginwindow" ) { print $2 }}')
+# login name
+LoginName="$(id -p | awk -F'	' '/^login/ { print $2 }')"
+if [ -z "${LoginName}" ]; then
+	LoginName="${UserName}"
+	# login id
+	declare -i LoginId="${UserId}"
+	# login primary group id
+	declare -i LoginPrimaryGroupId=${UserPrimaryGroupId}
+	# login home
+	LoginHome="${UserHome}"
+	# launch as user
+	LaunchAsUser=""
+else
+	declare -i LoginId="$(readDS --account="${LoginName}" --key="UniqueID")"
+	declare -i LoginPrimaryGroupId="$(readDS --account="${LoginName}" --key="PrimaryGroupID")"
+	LoginHome="$(readDS --account="${LoginName}" --key="NFSHomeDirectory")"
+	if [[ ${IntegerOsVersion} -ge 101000 ]]; then
+    LaunchAsUser="launchctl asuser ${LoginId}"
+    LaunchAsUserWithChroot="${LaunchAsUser} chroot -u ${LoginId} -g ${LoginPrimaryGroupId} /"
+	elif [[ ${IntegerOsVersion} -le 100900 ]]; then
+    LaunchAsUser="launchctl bsexec ${LoginId}"
+    LaunchAsUserWithChroot="${LaunchAsUser} chroot -u ${LoginId} -g ${LoginPrimaryGroupId} /"
+	fi
+fi
+declare -r LoginName LoginId LoginPrimaryGroupId LoginHome LaunchAsUser
+# case $(ps -o state= -p ${$}) in
+if [ -t 0 ]; then
+		# interactive shell (not started from launch daemon)
+		declare -ri Background=${NO}
+else
+		# background shell
+		declare -ri Background=${YES}
+fi
 # time zone
 declare -r TimeZone="Europe/Vienna"
 # internal timeserver
@@ -210,11 +340,17 @@ TimeServersInt+=( "ntp2.premedia.at" )
 declare -r TimeServersInt
 # external timeserver
 declare -a TimeServersExt
-TimeServersExt=( "time.euro.apple.com" )
-TimeServersExt=( "time.apple.com" )
+TimeServersExt+=( "time.euro.apple.com" )
+TimeServersExt+=( "time.apple.com" )
 declare -r TimeServersExt
 # network services to turn off (regex)
-declare -r ShutdownNetworkServices="(Firewire|Bluetooth (DUN|PAN)|Thunderbolt Bridge)"
+#declare -r ShutdownNetworkServices="(Firewire|Bluetooth (DUN|PAN)|Thunderbolt Bridge)"
+declare -a ShutdownNetworkServices
+ShutdownNetworkServices+=( "Firewire" )
+ShutdownNetworkServices+=( "Bluetooth DUN" )
+ShutdownNetworkServices+=( "Bluetooth PAN" )
+ShutdownNetworkServices+=( "Thunderbolt Bridge" )
+declare -r ShutdownNetworkServices
 # hidden users (typically the same as LocalAdminUsers)
 declare -a HiddenUsers
 HiddenUsers=( "${LocalAdminUsers[@]}" )
@@ -271,11 +407,11 @@ SetupAssistantSettings+=( "~/${PrefsRPN}/com.apple.SetupAssistant.plist${DELIMIT
 SetupAssistantSettings+=( "~/${PrefsRPN}/com.apple.SetupAssistant.plist${DELIMITER}DidSeeTouchIDSetup${DELIMITER}-bool${DELIMITER}true${DELIMITER}" )
 SetupAssistantSettings+=( "~/${PrefsRPN}/com.apple.SetupAssistant.plist${DELIMITER}DidSeeTrueTonePrivacy${DELIMITER}-bool${DELIMITER}true${DELIMITER}" )
 SetupAssistantSettings+=( "~/${PrefsRPN}/com.apple.SetupAssistant.plist${DELIMITER}GestureMovieSeen${DELIMITER}-string${DELIMITER}none${DELIMITER}" )
-SetupAssistantSettings+=( "~/${PrefsRPN}/com.apple.SetupAssistant.plist${DELIMITER}LastPreLoginTasksPerformedBuild${DELIMITER}-string${DELIMITER}${BUILDVERSION}${DELIMITER}" )
-SetupAssistantSettings+=( "~/${PrefsRPN}/com.apple.SetupAssistant.plist${DELIMITER}LastPreLoginTasksPerformedVersion${DELIMITER}-string${DELIMITER}${PRODUCTVERSION}${DELIMITER}" )
+SetupAssistantSettings+=( "~/${PrefsRPN}/com.apple.SetupAssistant.plist${DELIMITER}LastPreLoginTasksPerformedBuild${DELIMITER}-string${DELIMITER}${OsBuildVersion}${DELIMITER}" )
+SetupAssistantSettings+=( "~/${PrefsRPN}/com.apple.SetupAssistant.plist${DELIMITER}LastPreLoginTasksPerformedVersion${DELIMITER}-string${DELIMITER}${OsProductVersion}${DELIMITER}" )
 SetupAssistantSettings+=( "~/${PrefsRPN}/com.apple.SetupAssistant.plist${DELIMITER}LastPrivacyBundleVersion${DELIMITER}-string${DELIMITER}2${DELIMITER}" )
-SetupAssistantSettings+=( "~/${PrefsRPN}/com.apple.SetupAssistant.plist${DELIMITER}LastSeenBuddyBuildVersion${DELIMITER}-string${DELIMITER}${BUILDVERSION}${DELIMITER}" )
-SetupAssistantSettings+=( "~/${PrefsRPN}/com.apple.SetupAssistant.plist${DELIMITER}LastSeenCloudProductVersion${DELIMITER}-string${DELIMITER}${PRODUCTVERSION}${DELIMITER}" )
+SetupAssistantSettings+=( "~/${PrefsRPN}/com.apple.SetupAssistant.plist${DELIMITER}LastSeenBuddyBuildVersion${DELIMITER}-string${DELIMITER}${OsBuildVersion}${DELIMITER}" )
+SetupAssistantSettings+=( "~/${PrefsRPN}/com.apple.SetupAssistant.plist${DELIMITER}LastSeenCloudProductVersion${DELIMITER}-string${DELIMITER}${OsProductVersion}${DELIMITER}" )
 SetupAssistantSettings+=( "~/${PrefsRPN}/com.apple.SetupAssistant.plist${DELIMITER}RunNonInteractive${DELIMITER}-bool${DELIMITER}true${DELIMITER}" )
 declare -r SetupAssistantSettings
 # login settings
@@ -288,10 +424,10 @@ AppleLoginWindowSettings+=( "${TargetVolume}${PrefsRPN}/com.apple.loginwindow.pl
 declare -r AppleLoginWindowSettings
 # login window settings
 declare -a LoginWindowSettings
-LoginWindowSettings+=( "~/${PrefsRPN}/loginwindow.plist${DELIMITER}BuildVersionStampAsNumber${DELIMITER}-integer${DELIMITER}${BuildVersionStampAsNumber}${DELIMITER}" )
-LoginWindowSettings+=( "~/${PrefsRPN}/loginwindow.plist${DELIMITER}BuildVersionStampAsString${DELIMITER}-string${DELIMITER}${BUILDVERSION}${DELIMITER}" )
-LoginWindowSettings+=( "~/${PrefsRPN}/loginwindow.plist${DELIMITER}SystemVersionStampAsNumber${DELIMITER}-integer${DELIMITER}${SystemVersionStampAsNumber}${DELIMITER}" )
-LoginWindowSettings+=( "~/${PrefsRPN}/loginwindow.plist${DELIMITER}SystemVersionStampAsString${DELIMITER}-string${DELIMITER}${PRODUCTVERSION}${DELIMITER}" )
+LoginWindowSettings+=( "~/${PrefsRPN}/loginwindow.plist${DELIMITER}BuildVersionStampAsNumber${DELIMITER}-integer${DELIMITER}${OsBuildVersionStampAsNumber}${DELIMITER}" )
+LoginWindowSettings+=( "~/${PrefsRPN}/loginwindow.plist${DELIMITER}BuildVersionStampAsString${DELIMITER}-string${DELIMITER}${OsBuildVersion}${DELIMITER}" )
+LoginWindowSettings+=( "~/${PrefsRPN}/loginwindow.plist${DELIMITER}SystemVersionStampAsNumber${DELIMITER}-integer${DELIMITER}${OsSystemVersionStampAsNumber}${DELIMITER}" )
+LoginWindowSettings+=( "~/${PrefsRPN}/loginwindow.plist${DELIMITER}SystemVersionStampAsString${DELIMITER}-string${DELIMITER}${OsProductVersion}${DELIMITER}" )
 LoginWindowSettings+=( "${TargetVolume}${PrefsRPN}/com.apple.loginwindow.plist${DELIMITER}showInputMenu${DELIMITER}-bool${DELIMITER}true${DELIMITER}Show input menu in systemUI" )
 declare -r LoginWindowSettings
 # automatic updates settings
@@ -378,22 +514,29 @@ disableNetworkServices() {
   local RV
 
   echo "INFO${DELIMITER}Shutdown network services ... "
-  while read NetworkService; do
-    ((++Idx > 1)) && echo -n ", "
-    echo -n "shutdown ${NetworkService} ... "
-    RV="$(networksetup -setnetworkserviceenabled "${NetworkService}" off 2>&1)"; RC=${?}
-    if ((RC == SUCCESS)); then
-      ((DisabledNetworkServices++))
-      echo -n "ok"
-    else
-      echo -e "ERROR${DELIMITER}networksetup -setnetworkserviceenabled '${NetworkService}' off failed${DELIMITER}RC=${RC}${DELIMITER}RV=${RV}"
-      EC=$((EC||RC))
-    fi
-  done < <(networksetup -listallnetworkservices |\
-           egrep "^([^\*])?${ShutdownNetworkServices}")
+#  while read NetworkService; do
+  for ((Idx=0; Idx < ${#ShutdownNetworkServices[@]}; Idx++)); do
+    while read NetworkService; do
+      ((++Idx > 1)) && echo -n ", "
+      echo -n "shutdown ${NetworkService} ... "
+      RV="$(networksetup -setnetworkserviceenabled "${NetworkService}" off 2>&1)"; RC=${?}
+      if ((RC == SUCCESS)); then
+        ((DisabledNetworkServices++))
+        echo -n "ok"
+      else
+        echo -e "ERROR${DELIMITER}networksetup -setnetworkserviceenabled '${NetworkService}' off failed${DELIMITER}RC=${RC}${DELIMITER}RV=${RV}"
+        EC=$((EC||RC))
+      fi
+    done < <(echo "${ShutdownNetworkServices[${Idx}]}" |\
+             egrep -v "^\*")
+  done
+#  done <<<"${ShutdownNetworkServices[${Idx}]}"
+#  done < <(networksetup -listallnetworkservices |\
+#           egrep "^([^\*])?${ShutdownNetworkServices}")
 
   if ((DisabledNetworkServices == SUCCESS)); then
     echo -n "No unnecessary network service found"
+    EC=${SUCCESS}
   fi
 
   if ((EC == SUCCESS)); then
@@ -509,7 +652,7 @@ setTimeServer() {
 
   echo -n ", set date from '${TimeServers[0]}' ... "
 
-  case ${OSVERSION[1]} in
+  case ${OsVersion[1]} in
     1[2-4])
       if [[ ! -d "${NtpKodFQPN}" ]]; then
         RV="$(mkdir -p "${NtpKodFQPN}" 2>&1)"; RC=${?}
@@ -730,7 +873,7 @@ enableARD() {
   local -i EC=0
   local RV=""
 
-  if ((OSVERSION[1] < 14)); then
+  if ((OsVersion[1] < 14)); then
     echo "INFO${DELIMITER}Enable ARD ... "
     echo -n "Configure ARD ... "
     RV="$(kickstart \
@@ -975,13 +1118,13 @@ disableLocationService() {
     EC=$((EC||RC))
   fi
   echo -n "Disable location daemon ... "
-  case ${OSVERSION[1]} in
+  case ${OsVersion[1]} in
     1[2-4])
       LocationdPlistFQFN="${LocationdFQPN}/${PrefsRPN}/ByHost/com.apple.locationd.plist"
       RV="$(defaults write "${LocationdPlistFQFN}" LocationServicesEnabled -int 0 2>&1)"; RC=${?}
       ;;
     11)
-      LocationdPlistFQFN="${LocationdFQPN}/${PrefsRPN}/ByHost/com.apple.locationd.${HWUUID}.plist"
+      LocationdPlistFQFN="${LocationdFQPN}/${PrefsRPN}/ByHost/com.apple.locationd.${HwUUID}.plist"
       RV="$(defaults write "${LocationdPlistFQFN}" LocationServicesEnabled -int 0 2>&1)"; RC=${?}
       ;;
   esac
@@ -2298,7 +2441,7 @@ disableWhatsNewNotification() {
 
   echo "INFO${DELIMITER}Disable What's New notification for users"
 
-  if ((OSVERSION[1] < 13)); then
+  if ((OsVersion[1] < 13)); then
     echo "Nothing to do since OS Version < 10.13"
     return ${EC}
   fi
@@ -2572,4 +2715,4 @@ disableWhatsNewNotification
 setAppleLoginWindowSettings # ok
 EOF
 
-setTimeServer
+disableNetworkServices
