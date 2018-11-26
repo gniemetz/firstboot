@@ -31,8 +31,8 @@ declare -r DELIMITER=$'|'
 declare -r DEBUG=${TRUE}
 if ((DEBUG == TRUE)); then
   # PS4
-	PS4='+(${BASH_SOURCE:-}:${LINENO:-}): ${FUNCNAME[0]:+${FUNCNAME[0]:-}(): }'
-	set -xv
+  PS4='+(${BASH_SOURCE:-}:${LINENO:-}): ${FUNCNAME[0]:+${FUNCNAME[0]:-}(): }'
+  set -xv
 else
   :
   #set +xv
@@ -46,26 +46,23 @@ declare -i EC=0
 # enable aliases
 shopt -s expand_aliases
 # aliases
+# on recovery disc
 alias PlistBuddy="${TargetVolume}usr/libexec/PlistBuddy"
 alias awk="${TargetVolume}usr/bin/awk"
 alias chmod="${TargetVolume}bin/chmod"
 alias chown="${TargetVolume}usr/sbin/chown"
-alias date="${TargetVolume}bin/date"
+alias curl="${TargetVolumeEscaped}usr/bin/curl"
+alias date="${TargetVolume}bin/date" 
 alias defaults="${TargetVolume}usr/bin/defaults"
 alias dscl="${TargetVolume}usr/bin/dscl"
 alias egrep="${TargetVolume}usr/bin/egrep"
 alias find="${TargetVolume}usr/bin/find"
-alias id="${TargetVolume}usr/bin/id"
 alias ioreg="${TargetVolume}usr/sbin/ioreg"
-alias kickstart="${TargetVolume}System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart"
 alias launchctl="${TargetVolume}bin/launchctl"
 alias mkdir="${TargetVolume}bin/mkdir"
-alias networksetup="${TargetVolume}usr/sbin/networksetup"
 alias ntpdate="${TargetVolume}usr/sbin/ntpdate"
-alias pkill="${TargetVolume}usr/bin/pkill"
 alias plutil="${TargetVolume}usr/bin/plutil"
 alias pmset="${TargetVolume}usr/bin/pmset"
-alias printf="${TargetVolume}usr/bin/printf"
 alias scutil="${TargetVolume}usr/sbin/scutil"
 alias security="${TargetVolume}usr/bin/security"
 alias sed="${TargetVolume}usr/bin/sed"
@@ -73,11 +70,17 @@ alias sntp="${TargetVolume}usr/bin/sntp"
 alias sort="${TargetVolume}usr/bin/sort"
 alias spctl="${TargetVolume}usr/sbin/spctl"
 alias sw_vers="${TargetVolume}usr/bin/sw_vers"
+alias touch="${TargetVolume}usr/bin/touch"
+alias tr="${TargetVolume}usr/bin/tr"
+# NOT no recovery disk
+alias id="${TargetVolume}usr/bin/id"
+alias kickstart="${TargetVolume}System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart"
+alias networksetup="${TargetVolume}usr/sbin/networksetup"
+alias pkill="${TargetVolume}usr/bin/pkill"
+alias printf="${TargetVolume}usr/bin/printf"
 alias system_profiler="${TargetVolume}usr/sbin/system_profiler"
 alias systemsetup="${TargetVolume}usr/sbin/systemsetup"
-alias touch="${TargetVolume}usr/bin/touch"
 alias touristd="${TargetVolume}System/Library/PrivateFrameworks/Tourist.framework/Versions/A/Resources/touristd"
-alias tr="${TargetVolume}usr/bin/tr"
 alias which="${TargetVolume}usr/bin/which"
 alias xmllint="${TargetVolume}usr/bin/xmllint"
 
