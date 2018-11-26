@@ -56,6 +56,7 @@ alias chroot="/usr/sbin/chroot"
 alias curl="/usr/bin/curl"
 alias date="/bin/date"
 alias defaults="/usr/bin/defaults"
+alias dig="/usr/bin/dig"
 alias dscl="/usr/bin/dscl"
 alias egrep="/usr/bin/egrep"
 alias find="/usr/bin/find"
@@ -341,10 +342,25 @@ fi
 declare -a HiddenUsers
 HiddenUsers=( "${LocalAdminUsers[@]}" )
 declare -r HiddenUsers
+# external ip
+ExternalIP="$(dig +short myip.opendns.com @resolver1.opendns.com)"
+CurlResponse="$(curl -sL www.ip2location.com/${ExternalIP})"
+Country="$(echo "${CurlResponse}" | \
+           xmllint \
+             --html \
+             --xpath 'normalize-space(//*[text() = "Country"]/../following-sibling::td/text())' \
+             - \
+             2>/dev/null
+          )"
 # time zone
-declare -r TimeZone="Europe/Vienna"
-# curl -sL www.ip2location.com/$(dig +short myip.opendns.com @resolver1.opendns.com) | xmllint --html --xpath '//*[text() = "Olson Time Zone"]/../../following-sibling::td/text()' -  2>/dev/null
-# internal timeserver
+TimeZone="$(echo "${CurlResponse}" | \
+            xmllint \
+              --html \
+              --xpath 'normalize-space(//*[text() = "Olson Time Zone"]/../../following-sibling::td/text())' \
+              - \
+              2>/dev/null
+           )"
+declare -r TimeZone="${TimeZone:-Europe/Vienna}"
 declare -a TimeServersInt
 TimeServersInt+=( "ntp1.premedia.at" ) # the first entry is the preferred time server
 TimeServersInt+=( "ntp2.premedia.at" )
