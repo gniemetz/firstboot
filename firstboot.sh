@@ -343,7 +343,7 @@ HiddenUsers=( "${LocalAdminUsers[@]}" )
 declare -r HiddenUsers
 # time zone
 declare -r TimeZone="Europe/Vienna"
-# curl -sL www.ip2location.com/$(dig +short myip.opendns.com @resolver1.opendns.com) | xmllint --html --xpath '//*[text() = "Olson Time Zone"]/../../following-sibling::td/text()' /Users/gerd/Documents/ip2location.com 2>/dev/null
+# curl -sL www.ip2location.com/$(dig +short myip.opendns.com @resolver1.opendns.com) | xmllint --html --xpath '//*[text() = "Olson Time Zone"]/../../following-sibling::td/text()' -  2>/dev/null
 # internal timeserver
 declare -a TimeServersInt
 TimeServersInt+=( "ntp1.premedia.at" ) # the first entry is the preferred time server
