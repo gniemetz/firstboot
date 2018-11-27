@@ -29,7 +29,7 @@ declare -ri ERROR=${NO}
 declare -ri FALSE=${NO}
 declare -ri MISSING=${NO}
 # debug script?
-declare -r DEBUG=${TRUE}
+declare -r DEBUG=${FALSE}
 if ((DEBUG == TRUE)); then
   # PS4
   PS4='+(${BASH_SOURCE:-}:${LINENO:-}): ${FUNCNAME[0]:+${FUNCNAME[0]:-}(): }'
@@ -72,11 +72,13 @@ alias sed="/usr/bin/sed"
 alias sntp="/usr/bin/sntp"
 alias sort="/usr/bin/sort"
 alias spctl="/usr/sbin/spctl"
+alias sysctl="/usr/sbin/sysctl"
 alias sw_vers="/usr/bin/sw_vers"
 alias touch="/usr/bin/touch"
 alias tr="/usr/bin/tr"
 alias rot13="tr 'A-Za-z' 'N-ZA-Mn-za-m' "
 # NOT no recovery disk
+alias base64="${TargetVolumeEscaped}usr/bin/base64"
 alias id="${TargetVolumeEscaped}usr/bin/id"
 alias kickstart="${TargetVolumeEscaped}System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart"
 alias networksetup="${TargetVolumeEscaped}usr/sbin/networksetup"
@@ -192,28 +194,31 @@ LocalAdminUsers+=( "emadmin" )
 declare -r LocalAdminUsers
 # local users
 declare -a LocalUsers
-LocalUsers=( $(printf "%s\n%s\n" "$( (set +o noglob && \
-                                   cd "${TargetVolume}Users" && \
-                                   { find * \
-                                       -type d \
-                                       -maxdepth 0 \
-                                       \( -iname guest* -o -iname shared -o -iname *.localized \) -prune -o \
-                                       -print || \
-                                     : ; } && \
-                                   set -o noglob) )" "${LocalAdminUsers[@]}" |\
-                                  sort -u) \
-                                )
+LocalUsers=( $(printf "%s\n%s\n" \
+               "$( (set +o noglob && \
+                    cd "${TargetVolume}Users" && \
+                    { find * \
+                        -type d \
+                        -maxdepth 0 \
+                        \( -iname guest* -o -iname shared -o -iname *.localized \) -prune -o \
+                        -print || \
+                      : ; } && \
+                    set -o noglob)
+                 )" "${LocalAdminUsers[@]}" |\
+                 sort -u) \
+           )
 declare -r LocalUsers
 # function for getting values from Directory Service via dscl
 readDS() {
-  local _Account _DSKey _DSValue
-  local _FS=":"
+  local User DsclKey DsclValue
+  local DsclFS=":"
+  local -i RC=0
 
   while :; do
     case ${1} in
       -a|--account)
         if [[ -n "${2}" && "${2:0:2}" != "--" && "${2:0:1}" != "-" ]]; then
-          _Account="${2}"
+          User="${2}"
           shift
         else
           printf 'ERROR: "%s" requires a non-empty option argument.\n' "${1}" >&2
@@ -221,7 +226,7 @@ readDS() {
         fi
         ;;
       --account=?*)
-        _Account=${1#*=} # Delete everything up to "=" and assign the remainder.
+        User=${1#*=} # Delete everything up to "=" and assign the remainder.
         ;;
       --account=) # Handle the case of an empty --account=
         printf 'ERROR: "%s" requires a non-empty option argument.\n' "${1}" >&2
@@ -229,7 +234,7 @@ readDS() {
         ;;
       -k|--key)
         if [[ -n "${2}" && "${2:0:2}" != "--" && "${2:0:1}" != "-" ]]; then
-          _DSKey="${2}"
+          DsclKey="${2}"
           shift
         else
           printf 'ERROR: "%s" requires a non-empty option argument.\n' "${1}" >&2
@@ -237,7 +242,7 @@ readDS() {
         fi
         ;;
       --key=?*)
-        _DSKey=${1#*=} # Delete everything up to "=" and assign the remainder.
+        DsclKey=${1#*=} # Delete everything up to "=" and assign the remainder.
         ;;
       --key=) # Handle the case of an empty --key=
         printf 'ERROR: "%s" requires a non-empty option argument.\n' "${1}" >&2
@@ -256,47 +261,78 @@ readDS() {
     shift
   done
 
-  if [ -n "${_Account}" ] && \
-  [ -n "${_DSKey}" ] && \
-  _DSValue="$(dscl . read /Users/"${_Account}" "${_DSKey}" |\
-              awk -F"${_FS}" \
-                  -v DSKey="${_DSKey}" \
-                '
-                BEGIN {
-                  DSValue=""
-                  DSKeyFound=0
-                }
-                function getValuesFromPosition(StartPosition) {
-                  for(FieldNr=StartPosition; FieldNr <= NF; FieldNr++) {
-                    DSValue = (DSValue == "" ? "" : DSValue FS) $FieldNr
+  if [[ -n "${User}" && -n "${DsclKey}" ]]; then
+    DsclValue="$({ dscl . read /Users/"${User}" "${DsclKey}" |\
+                awk -F"${DsclFS}" \
+                    -v DSKey="${DsclKey}" \
+                  '
+                  BEGIN {
+                    DSValue=""
+                    DSKeyFound=0
                   }
-                }
-                DSKeyFound == 1 {
-                  getValuesFromPosition(1)
-                  DSKeyFound=0
-                }
-                $1 == DSKey {
-                  if (NF > 1) {
-                    getValuesFromPosition(2)
-                  } else {
-                    DSKeyFound=1
-                    next
+                  function getValuesFromPosition(StartPosition) {
+                    for(FieldNr=StartPosition; FieldNr <= NF; FieldNr++) {
+                      DSValue = (DSValue == "" ? "" : DSValue FS) $FieldNr
+                    }
                   }
-                }
-                END {
-                  # trim leading space
-                  gsub(/^[[:space:]]+/, "", DSValue)
-                  printf("%s", DSValue)
-                }
-                ')"; then
-    echo "${_DSValue}"
-    return ${SUCCESS}
+                  DSKeyFound == 1 {
+                    getValuesFromPosition(1)
+                    DSKeyFound=0
+                  }
+                  $1 == DSKey {
+                    if (NF > 1) {
+                      getValuesFromPosition(2)
+                    } else {
+                      DSKeyFound=1
+                      next
+                    }
+                  }
+                  END {
+                    # trim leading space
+                    gsub(/^[[:space:]]+/, "", DSValue)
+                    printf("%s", DSValue)
+                  }
+                  '; } 2>&1)"; RC=${?}
+    if ((RC == 56)); then
+      echo -e "WARNING${Delimiter}User '${User}' not found${Delimiter}RC=${RC}${Delimiter}RV=${DsclValue}" >&2
+    elif ((RC != 0)); then
+      echo -e "ERROR${Delimiter}dscl . read /Users/${User} '${DsclKey}' failed${Delimiter}RC=${RC}${Delimiter}RV=${DsclValue}" >&2
+    else
+      echo "${DsclValue}"
+      return ${SUCCESS}
+    fi
   else
+    echo -e "ERROR${Delimiter}User='${User}'/Key='${DsclKey}' empty${Delimiter}RC=${RC}${Delimiter}RV=${DsclValue}" >&2
     return ${ERROR}
   fi
 }
 # user name
 declare -r UserName="$(id -p | awk -F'	' '/^uid/ { print $2 }')"
+# on recovery disk
+# login _iconservices
+# uid   root
+
+# nobody logged into the gui but ssh with root
+# uid root
+
+# nobody logged into the gui but ssh with 'someadmin' and sudo root
+# login someadmin
+# uid root
+
+# user 'someuser' logged into the gui and ssh with 'root'
+# uid root
+
+# user 'someuser' logged into the gui and ssh with 'someadmin'
+# uid someadmin
+
+# user 'someuser' logged into the gui and ssh with 'someadmin' and sudo root
+# login someadmin
+# uid root
+
+# user 'someuser' logged into the gui, 'someadmin' logged into the gui via ARD and ssh with 'someadmin' and sudo root
+# login someadmin
+# uid root
+
 # user id
 declare -ir UserId="$(readDS --account="${UserName}" --key="UniqueID")"
 # user primary group id
@@ -304,7 +340,41 @@ declare -ir UserPrimaryGroupId="$(readDS --account="${UserName}" --key="PrimaryG
 # user home
 declare -r UserHome="$(readDS --account="${UserName}" --key="NFSHomeDirectory")"
 # logged in user
-LoggedInUser=$(scutil <<< "show State:/Users/ConsoleUser" | awk -F': ' '/[[:space:]]+Name[[:space:]]:/ { if ( $2 != "loginwindow" ) { print $2 }}')
+# ConsoleUser=$(scutil <<< "show State:/Users/ConsoleUser" | awk -F': ' '/[[:space:]]+Name[[:space:]]:/ { if ( $2 != "loginwindow" ) { print $2 }}')
+declare -ar ConsoleUsers=( $(scutil <<< "show State:/Users/ConsoleUser" | \
+                             awk \
+                               -v Delimiter="${Delimiter:-$'|'}" \
+                               -F': ' \
+                               '
+                               /[[:space:]]+kCGSSessionOnConsoleKey[[:space:]]:/ { 
+                                 OnConsole=$2 
+                               } 
+                               /[[:space:]]+kCGSSessionUserNameKey[[:space:]]:/ && OnConsole != "" { 
+                                 ConsoleUsers=sprintf("%s%c%s%s%s%c", (ConsoleUsers == "" ? "" : ConsoleUsers " "), 34, $2, Delimiter, OnConsole, 34); OnConsole="" 
+                               } 
+                               END { 
+                                 print ConsoleUsers 
+                               }
+                             '
+                            ) )
+# on recovery disk
+# empty (no State:/Users/ConsoleUser)
+
+# nobody logged into the gui but ssh with root
+# empty
+
+# nobody logged into the gui but ssh with 'someadmin' and sudo root
+# empty
+
+# user 'someuser' logged into the gui and ssh with 'someadmin'
+# [0]=someuser|TRUE
+
+# user 'someuser' logged into the gui and ssh with 'someadmin' and sudo root
+# [0]=someuser|TRUE
+
+# user 'someuser' logged into the gui, 'someadmin' logged into the gui via ARD and ssh with 'someadmin' and sudo root
+# [0]=someadmin|FALSE [1]=someuser|TRUE
+
 # login name
 LoginName="$(id -p | awk -F'	' '/^login/ { print $2 }')"
 if [[ -z "${LoginName}" ]]; then
@@ -342,25 +412,45 @@ fi
 declare -a HiddenUsers
 HiddenUsers=( "${LocalAdminUsers[@]}" )
 declare -r HiddenUsers
+# local user real name (late bound in functions)
+LocalUserRealName=""
+# local user id (late bound in functions)
+declare -i LocalUserUniqueId
+# local user primary group id (late bound in functions)
+declare -i LocalUserPrimaryGroupId
+# local user homedir (late bound in functions)
+LocalUserHome=""
 # external ip
 ExternalIP="$(dig +short myip.opendns.com @resolver1.opendns.com)"
-CurlResponse="$(curl -sL www.ip2location.com/${ExternalIP})"
-Country="$(echo "${CurlResponse}" | \
-           xmllint \
-             --html \
-             --xpath 'normalize-space(//*[text() = "Country"]/../following-sibling::td/text())' \
-             - \
-             2>/dev/null
-          )"
-# time zone
-TimeZone="$(echo "${CurlResponse}" | \
-            xmllint \
-              --html \
-              --xpath 'normalize-space(//*[text() = "Olson Time Zone"]/../../following-sibling::td/text())' \
-              - \
-              2>/dev/null
-           )"
+if [[ -n "${ExternalIP}" ]]; then
+  # get location from ip
+  CurlResponse="$(curl -sL www.ip2location.com/${ExternalIP})"
+  # country
+  Country="$(echo "${CurlResponse}" | \
+             xmllint \
+               --html \
+               --xpath 'normalize-space(//*[text() = "Country"]/../following-sibling::td/text())' \
+               - \
+               2>/dev/null
+            )"
+  # time zone
+  TimeZone="$(echo "${CurlResponse}" | \
+              xmllint \
+                --html \
+                --xpath 'normalize-space(//*[text() = "Olson Time Zone"]/../../following-sibling::td/text())' \
+                - \
+                2>/dev/null
+             )"
+fi
+declare -r Country="${Country:-Austria}"
 declare -r TimeZone="${TimeZone:-Europe/Vienna}"
+declare -i IdleTime="$(ioreg -c IOHIDSystem | awk '/HIDIdleTime/ {print int($NF / 1000000000); exit}')"
+declare -i ScreenSaverPid="$(pgrep -f "/System/Library/Frameworks/ScreenSaver.framework/Resources/ScreenSaverEngine.app/Contents/MacOS/ScreenSaverEngine")"
+declare -i BootTime=$(sysctl -n kern.boottime | awk '{ for (f=0; f < NF; f++) { if ($f == "sec") { print int($(f + 2)); exit }} }')
+declare -i SleepTime=$(sysctl -n kern.sleeptime | awk '{ for (f=0; f < NF; f++) { if ($f == "sec") { print int($(f + 2)); exit }} }')
+declare -i WakeTime=$(sysctl -n kern.waketime | awk '{ for (f=0; f < NF; f++) { if ($f == "sec") { print int($(f + 2)); exit }} }')
+declare ScreenPowerState="$(ioreg -n IODisplayWrangler | awk -F',' '/IOPowerManagement/ { split($4, CurrentPowerState, "="); print (CurrentPowerState[2] < 4 ? "off" : "on") }')"
+# time servers
 declare -a TimeServersInt
 TimeServersInt+=( "ntp1.premedia.at" ) # the first entry is the preferred time server
 TimeServersInt+=( "ntp2.premedia.at" )
@@ -483,6 +573,26 @@ declare -r ScreenSettings
 # whats new settings
 # Var:0:2 = ~/ -> Var/#~/Var2
 # funtions
+killProcess() {
+  local ProcessName='^'"${1}"'$'
+  local RV
+  local -i RC=0
+
+  if [[ -n "${LocalUserUniqueId}" ]]; then
+    RV="$({ pkill -0 -U ${LocalUserUniqueId} -f "${ProcessName}" && \
+          { pkill -U ${LocalUserUniqueId} -f "${ProcessName}" || \
+          { pkill -9 -U ${LocalUserUniqueId} -f "${ProcessName}"; }; } ||
+          { echo "WARNING${Delimiter}${ProcessName} not found" >&2; true; }; } 2>&1)"; RC=${?}
+    if ((RC != SUCCESS)); then
+      echo -e "ERROR${Delimiter}pkill -U ${LocalUserUniqueId} -f '${Process}' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}" >&2
+    fi
+  else
+    echo -e "ERROR${Delimiter}User ID is empty" >&2
+    return ${ERROR}
+  fi
+  return ${RC}
+}
+
 setTCPSettings() {
   local SysctlOption=""
   local SysctlValue=""
@@ -500,7 +610,7 @@ setTCPSettings() {
     if ((RC == SUCCESS)); then
       echo -n "ok, "
     else
-      echo -e "ERROR${Delimiter}echo '# Generated through ${ScriptFN} at ${TimeStamp}' >'${SysctlConfFQFN}' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}"
+      echo -e "ERROR${Delimiter}echo '# Generated through ${ScriptFN} at ${TimeStamp}' >'${SysctlConfFQFN}' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}" >&2
       EC=$((EC||RC))
     fi
   fi
@@ -526,7 +636,7 @@ setTCPSettings() {
       if ((RC == SUCCESS)); then
         echo -n "ok"
       else
-        echo -e "ERROR${Delimiter}Writing of ${SysctlOption}=${SysctlValue} to /etc/sysctl.conf failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}"
+        echo -e "ERROR${Delimiter}Writing of ${SysctlOption}=${SysctlValue} to /etc/sysctl.conf failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}" >&2
         EC=$((EC||RC))
       fi
     done <<<"${SysCtlOptions[${Idx}]}"
@@ -556,7 +666,7 @@ disableNetworkServices() {
         ((DisabledNetworkServices++))
         echo -n "ok"
       else
-        echo -e "ERROR${Delimiter}networksetup -setnetworkserviceenabled '${NetworkService}' off failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}"
+        echo -e "ERROR${Delimiter}networksetup -setnetworkserviceenabled '${NetworkService}' off failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}" >&2
         EC=$((EC||RC))
       fi
     done < <(echo "${ShutdownNetworkServices[${Idx}]}" |\
@@ -589,7 +699,7 @@ disableIPV6() {
     if ((RC == SUCCESS)); then
       echo -n "ok"
     else
-      echo -e "ERROR${Delimiter}networksetup -setv6off '${NetworkService}' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}"
+      echo -e "ERROR${Delimiter}networksetup -setv6off '${NetworkService}' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}" >&2
       EC=$((EC||RC))
     fi
   done < <(networksetup -listallnetworkservices |\
@@ -639,34 +749,7 @@ setTimeServer() {
   if ((RC == SUCCESS)); then
     echo -n "ok"
   else
-    echo -e "ERROR${Delimiter}systemsetup -setusingnetworktime off failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}"
-    EC=$((EC||RC))
-  fi
-
-  echo -n ", create '${NtpDriftFQPN}' ... "
-  RV="$(mkdir -p "${NtpDriftFQPN}" 2>&1)"; RC=${?}
-  if ((RC == SUCCESS)); then
-    echo -n "ok"
-  else
-    echo -e "ERROR${Delimiter}mkdir -p '${NtpDriftFQPN}' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}"
-    EC=$((EC||RC))
-  fi
-
-  echo -n ", create '${NtpConfFQFN}' ... "
-  RV="$( { echo -e "${NtpConf}" > "${NtpConfFQFN}"; } 2>&1)"; RC=${?}
-  if ((RC == SUCCESS)); then
-    echo -n "ok"
-  else
-    echo -e "ERROR${Delimiter}echo '${NtpConf}' > '${NtpConfFQFN}' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}"
-    EC=$((EC||RC))
-  fi
-
-  echo -n ", touch '${NtpConfFQFN}' ... "
-  RV="$(touch "${NtpConfFQFN}" 2>&1)"; RC=${?}
-  if ((RC == SUCCESS)); then
-    echo -n "ok"
-  else
-    echo -e "ERROR${Delimiter}touch '${NtpConfFQFN}' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}"
+    echo -e "ERROR${Delimiter}systemsetup -setusingnetworktime off failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}" >&2
     EC=$((EC||RC))
   fi
 
@@ -675,7 +758,43 @@ setTimeServer() {
   if ((RC == SUCCESS)); then
     echo -n "ok"
   else
-    echo -e "ERROR${Delimiter}systemsetup -settimezone '${TimeZone}' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}"
+    echo -e "ERROR${Delimiter}systemsetup -settimezone '${TimeZone}' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}" >&2
+    EC=$((EC||RC))
+  fi
+
+  echo -n ", create '${NtpDriftFQPN}' ... "
+  RV="$(mkdir -p "${NtpDriftFQPN}" 2>&1)"; RC=${?}
+  if ((RC == SUCCESS)); then
+    echo -n "ok"
+  else
+    echo -e "ERROR${Delimiter}mkdir -p '${NtpDriftFQPN}' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}" >&2
+    EC=$((EC||RC))
+  fi
+
+  echo -n ", create '${NtpConfFQFN}' ... "
+  RV="$( { echo -e "${NtpConf}" > "${NtpConfFQFN}"; } 2>&1)"; RC=${?}
+  if ((RC == SUCCESS)); then
+    echo -n "ok"
+  else
+    echo -e "ERROR${Delimiter}echo '${NtpConf}' > '${NtpConfFQFN}' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}" >&2
+    EC=$((EC||RC))
+  fi
+
+  echo -n ", touch '${NtpConfFQFN}' ... "
+  RV="$(touch "${NtpConfFQFN}" 2>&1)"; RC=${?}
+  if ((RC == SUCCESS)); then
+    echo -n "ok"
+  else
+    echo -e "ERROR${Delimiter}touch '${NtpConfFQFN}' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}" >&2
+    EC=$((EC||RC))
+  fi
+
+  echo -n ", set timezone to '${TimeZone}' ... "
+  RV="$(systemsetup -settimezone "${TimeZone}" 2>&1)"; RC=${?}
+  if ((RC == SUCCESS)); then
+    echo -n "ok"
+  else
+    echo -e "ERROR${Delimiter}systemsetup -settimezone '${TimeZone}' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}" >&2
     EC=$((EC||RC))
   fi
 
@@ -688,7 +807,7 @@ setTimeServer() {
         if ((RC == SUCCESS)); then
           echo -n "ok"
         else
-          echo -e "ERROR${Delimiter}mkdir -p '${NtpKodFQPN}' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}"
+          echo -e "ERROR${Delimiter}mkdir -p '${NtpKodFQPN}' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}" >&2
           EC=$((EC||RC))
         fi
       fi
@@ -699,11 +818,11 @@ setTimeServer() {
           if ((RC == SUCCESS)); then
             echo -n "ok"
           else
-            echo -e "ERROR${Delimiter}chmod 666 '${NtpKodFQFN}' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}"
+            echo -e "ERROR${Delimiter}chmod 666 '${NtpKodFQFN}' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}" >&2
             EC=$((EC||RC))
           fi
         else
-          echo -e "ERROR${Delimiter}touch '${NtpKodFQFN}' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}"
+          echo -e "ERROR${Delimiter}touch '${NtpKodFQFN}' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}" >&2
           EC=$((EC||RC))
         fi
       fi
@@ -711,7 +830,7 @@ setTimeServer() {
       if ((RC == SUCCESS)); then
         echo -n "ok"
       else
-        echo -e "ERROR${Delimiter}sntp -sS '${TimeServers[0]}' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}"
+        echo -e "ERROR${Delimiter}sntp -sS '${TimeServers[0]}' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}" >&2
         EC=$((EC||RC))
       fi
       ;;
@@ -722,11 +841,11 @@ setTimeServer() {
         if ((RC == SUCCESS)); then
           echo -n "ok"
         else
-          echo -e "ERROR${Delimiter}sntp -j -- '${TimeServers[0]}' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}"
+          echo -e "ERROR${Delimiter}sntp -j -- '${TimeServers[0]}' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}" >&2
           EC=$((EC||RC))
         fi
       else
-        echo -e "ERROR${Delimiter}sntp -s -- '${TimeServers[0]}' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}"
+        echo -e "ERROR${Delimiter}sntp -s -- '${TimeServers[0]}' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}" >&2
         EC=$((EC||RC))
       fi
       ;;
@@ -735,7 +854,7 @@ setTimeServer() {
       if ((RC == SUCCESS)); then
         echo -n "ok"
       else
-        echo -e "ERROR${Delimiter}ntpdate '${TimeServers[0]}' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}"
+        echo -e "ERROR${Delimiter}ntpdate '${TimeServers[0]}' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}" >&2
         EC=$((EC||RC))
       fi
       ;;
@@ -746,7 +865,7 @@ setTimeServer() {
   if ((RC == SUCCESS)); then
     echo -n "ok"
   else
-    echo -e "ERROR${Delimiter}systemsetup -setusingnetworktime on failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}"
+    echo -e "ERROR${Delimiter}systemsetup -setusingnetworktime on failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}" >&2
     EC=$((EC||RC))
   fi
 
@@ -785,7 +904,7 @@ setAllLocalNames() {
     if ((RC == SUCCESS)); then
       echo -n "ok, "
     else
-      echo -e "ERROR${Delimiter}scutil --set HostName '${AdjustedComputerName}' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}"
+      echo -e "ERROR${Delimiter}scutil --set HostName '${AdjustedComputerName}' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}" >&2
       EC=$((EC||RC))
     fi
   done
@@ -795,7 +914,7 @@ setAllLocalNames() {
   if ((RC == SUCCESS)); then
     echo -n "ok"
   else
-    echo -e "ERROR${Delimiter}defaults write '${SmbServerPlistFQFN}' NetBIOSName -string '${NetBIOSName}' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}"
+    echo -e "ERROR${Delimiter}defaults write '${SmbServerPlistFQFN}' NetBIOSName -string '${NetBIOSName}' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}" >&2
     EC=$((EC||RC))
   fi
 
@@ -817,7 +936,7 @@ setPowerSaveSettings() {
   if ((RC == SUCCESS)); then
     echo -n "ok, "
   else
-    echo -e "ERROR${Delimiter}pmset -c sleep 0 failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}"
+    echo -e "ERROR${Delimiter}pmset -c sleep 0 failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}" >&2
     EC=$((EC||RC))
   fi
 
@@ -826,7 +945,7 @@ setPowerSaveSettings() {
   if ((RC == SUCCESS)); then
     echo -n "ok"
   else
-    echo -e "ERROR${Delimiter}defaults write ${GlobalPreferencesFQFN} NSAppSleepDisabled -bool true failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}"
+    echo -e "ERROR${Delimiter}defaults write ${GlobalPreferencesFQFN} NSAppSleepDisabled -bool true failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}" >&2
     EC=$((EC||RC))
   fi
 
@@ -848,7 +967,7 @@ setPrinterSettings() {
   if ((RC == SUCCESS)); then
     echo -n "ok, "
   else
-    echo -e "ERROR${Delimiter}sed -i '' -E 's/Resume-Printer([[:space:]])?//g' '${CupsdConfFQFN}' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}"
+    echo -e "ERROR${Delimiter}sed -i '' -E 's/Resume-Printer([[:space:]])?//g' '${CupsdConfFQFN}' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}" >&2
     EC=$((EC||RC))
   fi
 
@@ -870,7 +989,7 @@ setPrinterSettings() {
   if ((RC == SUCCESS)); then
     echo -n "ok"
   else
-    echo -e "ERROR${Delimiter}: failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}"
+    echo -e "ERROR${Delimiter}: failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}" >&2
     EC=$((EC||RC))
   fi
 
@@ -905,11 +1024,12 @@ enableARD() {
             -restart \
               -agent \
               -console \
-              -menu 2>&1)"; RC=${?}
+              -menu 2>&1
+         )"; RC=${?}
     if ((RC == SUCCESS)); then
       echo -n "ok"
     else
-      echo -e "ERROR${Delimiter}kickstart -configure -users '${AllowedARDUserString}' -activate -access -on -privs -all -allowAccessFor -specifiedUsers -clientopts -setmenuextra -menuextra no -restart -agent -console -menu failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}"
+      echo -e "ERROR${Delimiter}kickstart -configure -users '${AllowedARDUserString}' -activate -access -on -privs -all -allowAccessFor -specifiedUsers -clientopts -setmenuextra -menuextra no -restart -agent -console -menu failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}" >&2
       EC=$((EC||RC))
     fi
 
@@ -934,7 +1054,7 @@ enableSSH() {
   if ((RC == SUCCESS)); then
     echo -n "ok"
   else
-    echo -e "ERROR${Delimiter}systemsetup -setremotelogin on failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}"
+    echo -e "ERROR${Delimiter}systemsetup -setremotelogin on failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}" >&2
     EC=$((EC||RC))
   fi
 
@@ -967,11 +1087,11 @@ setAppleLoginWindowSettings() {
         if ((RCs[${Idx}] == SUCCESS)); then
           echo -n "ok"
         else
-          echo -e "ERROR${Delimiter}chown -R '${dsclUniqueID}:${dsclPrimaryGroupID}' '${SettingFile}' failed${Delimiter}RC=${RCs[${Idx}]}${Delimiter}RV=${RV}"
+          echo -e "ERROR${Delimiter}chown -R '${dsclUniqueID}:${dsclPrimaryGroupID}' '${SettingFile}' failed${Delimiter}RC=${RCs[${Idx}]}${Delimiter}RV=${RV}" >&2
           RC=$((RC||RCs[${Idx}]))
         fi
       else
-        echo -e "ERROR${Delimiter}defaults write '${SettingFile}' '${SettingName}' '${SettingType}' '${SettingValue}' failed${Delimiter}RC=${RCs[${Idx}]}${Delimiter}RV=${RV}"
+        echo -e "ERROR${Delimiter}defaults write '${SettingFile}' '${SettingName}' '${SettingType}' '${SettingValue}' failed${Delimiter}RC=${RCs[${Idx}]}${Delimiter}RV=${RV}" >&2
         RC=$((RC||RCs[${Idx}]))
       fi
     done <<<"${AppleLoginWindowSettings[${Idx}]}"
@@ -983,11 +1103,11 @@ setAppleLoginWindowSettings() {
   if [[ ${RC} -eq 10 && "${RV}" == "XPath set is empty" ]]; then
     RV="$(${DEBUG} defaults write "${LoginWindowPlistFQFN}" HiddenUsersList -array 2>&1)"; RC=${?}
     if ((RC != SUCCESS)); then
-      echo -e "ERROR${Delimiter}defaults write '${LoginWindowPlistFQFN}' HiddenUsersList -array failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}"
+      echo -e "ERROR${Delimiter}defaults write '${LoginWindowPlistFQFN}' HiddenUsersList -array failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}" >&2
       EC=$((EC||RC))
     fi
   elif [[ ! (${RC} -eq 0 && ${RV} =~ "array") ]]; then
-    echo -e "ERROR${Delimiter}plutil -convert xml1 -o - '${LoginWindowPlistFQFN}' | xmllint -xpath '(//dict/key[text() = 'HiddenUsersList']/following-sibling::array)[1]' - failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}"
+    echo -e "ERROR${Delimiter}plutil -convert xml1 -o - '${LoginWindowPlistFQFN}' | xmllint -xpath '(//dict/key[text() = 'HiddenUsersList']/following-sibling::array)[1]' - failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}" >&2
     EC=$((EC||RC))
   fi
   if ((RC == SUCCESS)); then
@@ -1009,12 +1129,12 @@ setAppleLoginWindowSettings() {
           if ((RC == SUCCESS)); then
             echo -n "ok"
           else
-            echo -e "ERROR${Delimiter}defaults write '${LoginWindowPlistFQFN}' HiddenUsersList -array-add '${HiddenUsers[${HiddenUsersIdx}]}' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}"
+            echo -e "ERROR${Delimiter}defaults write '${LoginWindowPlistFQFN}' HiddenUsersList -array-add '${HiddenUsers[${HiddenUsersIdx}]}' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}" >&2
             EC=$((EC||RC))
           fi
         fi
       else
-        echo -e "ERROR${Delimiter}plutil -convert xml1 -o - '${LoginWindowPlistFQFN}' | xmllint -xpath 'count((//dict/key[text() = 'HiddenUsersList']/following-sibling::array)[1]/string)' - failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}"
+        echo -e "ERROR${Delimiter}plutil -convert xml1 -o - '${LoginWindowPlistFQFN}' | xmllint -xpath 'count((//dict/key[text() = 'HiddenUsersList']/following-sibling::array)[1]/string)' - failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}" >&2
         EC=$((EC||RC))
       fi
     done
@@ -1039,7 +1159,7 @@ disableBonjourAdvertisement() {
   if ((RC == SUCCESS)); then
     echo -n "ok"
   else
-    echo -e "ERROR${Delimiter}defaults write '/${PrefsRPN}/${mDNSResponderPlist}' NoMulticastAdvertisements -bool true failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}"
+    echo -e "ERROR${Delimiter}defaults write '/${PrefsRPN}/${mDNSResponderPlist}' NoMulticastAdvertisements -bool true failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}" >&2
     EC=$((EC||RC))
   fi
 
@@ -1063,7 +1183,7 @@ setTerminalSettings() {
   if ((RC == SUCCESS)); then
     echo -n "ok, "
   else
-    echo -e "ERROR${Delimiter}echo '${TerminalSettings}' | base64 -D -o '${TerminalPlistFQFN}' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}"
+    echo -e "ERROR${Delimiter}echo '${TerminalSettings}' | base64 -D -o '${TerminalPlistFQFN}' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}" >&2
     EC=$((EC||RC))
   fi
 
@@ -1072,7 +1192,7 @@ setTerminalSettings() {
   if ((RC == SUCCESS)); then
     echo -n "ok"
   else
-    echo -e "ERROR${Delimiter}chmod 644 '${TerminalPlistFQFN}' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}"
+    echo -e "ERROR${Delimiter}chmod 644 '${TerminalPlistFQFN}' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}" >&2
     EC=$((EC||RC))
   fi
 
@@ -1094,7 +1214,7 @@ disableGateKeeper() {
   if ((RC == SUCCESS)); then
     echo -n "ok, "
   else
-    echo -e "ERROR${Delimiter}spctl --master-disable failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}"
+    echo -e "ERROR${Delimiter}spctl --master-disable failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}" >&2
     EC=$((EC||RC))
   fi
 
@@ -1103,7 +1223,7 @@ disableGateKeeper() {
   if ((RC == SUCCESS)); then
     echo -n "ok"
   else
-    echo -e "ERROR${Delimiter}defaults write '${SecurityPlistFQFN}' GKAutoRearm -bool false failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}"
+    echo -e "ERROR${Delimiter}defaults write '${SecurityPlistFQFN}' GKAutoRearm -bool false failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}" >&2
     EC=$((EC||RC))
   fi
 
@@ -1127,7 +1247,7 @@ disableLocationService() {
   if ((RC == SUCCESS)); then
     echo -n "ok, "
   else
-    echo -e "ERROR${Delimiter}launchctl unload '${LaunchctlLocationdPlistFQFN}' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}"
+    echo -e "ERROR${Delimiter}launchctl unload '${LaunchctlLocationdPlistFQFN}' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}" >&2
     EC=$((EC||RC))
   fi
   echo -n "Disable location daemon ... "
@@ -1140,11 +1260,14 @@ disableLocationService() {
       LocationdPlistFQFN="${LocationdFQPN}/${PrefsRPN}/ByHost/com.apple.locationd.${HwUUID}.plist"
       RV="$(defaults write "${LocationdPlistFQFN}" LocationServicesEnabled -int 0 2>&1)"; RC=${?}
       ;;
+    *)
+      echo -e "ERROR${Delimiter}Unkown OS Version $OsVersion[1]}" >&2
+      ;;
   esac
   if ((RC == SUCCESS)); then
     echo -n "ok, "
   else
-    echo -e "ERROR${Delimiter}defaults write '${LocationdPlistFQFN}' LocationServicesEnabled -int 0 failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}"
+    echo -e "ERROR${Delimiter}defaults write '${LocationdPlistFQFN}' LocationServicesEnabled -int 0 failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}" >&2
     EC=$((EC||RC))
   fi
   echo -n "Set owner ... "
@@ -1152,7 +1275,7 @@ disableLocationService() {
   if ((RC == SUCCESS)); then
     echo -n "ok, "
   else
-    echo -e "ERROR${Delimiter}chown -R _locationd:_locationd '${LocationdFQPN}' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}"
+    echo -e "ERROR${Delimiter}chown -R _locationd:_locationd '${LocationdFQPN}' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}" >&2
     EC=$((EC||RC))
   fi
   echo -n "Start location daemon ... "
@@ -1160,7 +1283,7 @@ disableLocationService() {
   if ((RC == SUCCESS)); then
     echo -n "ok"
   else
-    echo -e "ERROR${Delimiter}launchctl load '${LocationdPlistFQFN}' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}"
+    echo -e "ERROR${Delimiter}launchctl load '${LocationdPlistFQFN}' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}" >&2
     EC=$((EC||RC))
   fi
 
@@ -1245,7 +1368,7 @@ setSetupAssistantSettings() {
           if ((RC == SUCCESS)); then
             echo -n "ok, "
           else
-            echo -e "ERROR${Delimiter}mkdir -p '${UserPreferencesFQPN}' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}"
+            echo -e "ERROR${Delimiter}mkdir -p '${UserPreferencesFQPN}' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}" >&2
             EC=$((EC||RC))
           fi
         fi
@@ -1262,17 +1385,17 @@ setSetupAssistantSettings() {
               if ((RCs[${Idx}] == SUCCESS)); then
                 echo -n "ok"
               else
-                echo -e "ERROR${Delimiter}chown -R '${dsclUniqueID}:${dsclPrimaryGroupID}' '${SettingFile}' failed${Delimiter}RC=${RCs[${Idx}]}${Delimiter}RV=${RV}"
+                echo -e "ERROR${Delimiter}chown -R '${dsclUniqueID}:${dsclPrimaryGroupID}' '${SettingFile}' failed${Delimiter}RC=${RCs[${Idx}]}${Delimiter}RV=${RV}" >&2
                 RC=$((RC||RCs[${Idx}]))
               fi
             else
-              echo -e "ERROR${Delimiter}defaults write '${SettingFile}' '${SettingName}' '${SettingType}' '${SettingValue}' failed${Delimiter}RC=${RCs[${Idx}]}${Delimiter}RV=${RV}"
+              echo -e "ERROR${Delimiter}defaults write '${SettingFile}' '${SettingName}' '${SettingType}' '${SettingValue}' failed${Delimiter}RC=${RCs[${Idx}]}${Delimiter}RV=${RV}" >&2
               RC=$((RC||RCs[${Idx}]))
             fi
           done <<<"${SetupAssistantSettings[${Idx}]}"
         done
 
-        if [[ "${User}" == "${LoggedInUser}" ]]; then
+        if [[ "${ConsoleUsers[@]}" =~ (^| )${User}\| ]]; then
           echo -n ", Kill preferences cache process ... "
           RV="$(pkill -0 -U ${dsclUniqueID} -f "^/usr/sbin/cfprefsd agent$" && \
                 pkill -U ${dsclUniqueID} -f "^/usr/sbin/cfprefsd agent$" || \
@@ -1280,7 +1403,7 @@ setSetupAssistantSettings() {
           if ((RC == SUCCESS)); then
             echo -n "ok"
           else
-            echo -e "ERROR${Delimiter}pkill -U ${dsclUniqueID} -f '^/usr/sbin/cfprefsd agent\$' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}"
+            echo -e "ERROR${Delimiter}pkill -U ${dsclUniqueID} -f '^/usr/sbin/cfprefsd agent\$' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}" >&2
             EC=$((EC||RC))
           fi
         fi
@@ -1296,7 +1419,7 @@ setSetupAssistantSettings() {
       if ((RC == 56)); then
         echo -e "WARNING${Delimiter}${User} via dscl not found${Delimiter}RC=${RC}${Delimiter}RV=${RV}"
       else
-        echo -e "ERROR${Delimiter}dscl . read ${UsersFQPN}/${User} NFSHomeDirectory PrimaryGroupID RealName UniqueID failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}"
+        echo -e "ERROR${Delimiter}dscl . read ${UsersFQPN}/${User} NFSHomeDirectory PrimaryGroupID RealName UniqueID failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}" >&2
         EC=$((EC||RC))
       fi
     fi
@@ -1310,7 +1433,7 @@ setSetupAssistantSettings() {
       echo -n "Create '${UserPreferencesFQPN}' ... "
       RV="$(mkdir -p "${UserPreferencesFQPN}" 2>&1)"; RC=${?}
       if ((RC != SUCCESS)); then
-        echo -e "ERROR${Delimiter}mkdir -p '${UserPreferencesFQPN}' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}"
+        echo -e "ERROR${Delimiter}mkdir -p '${UserPreferencesFQPN}' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}" >&2
         EC=$((EC||RC))
       fi
     fi
@@ -1326,7 +1449,7 @@ setSetupAssistantSettings() {
           if ((RCs[${Idx}] == SUCCESS)); then
             echo -n "ok"
           else
-            echo -e "ERROR${Delimiter}defaults write '${UserPreferencesFQPN}/${SettingFile}' '${SettingName}' '${SettingType}' '${SettingValue}' failed${Delimiter}RC=${RCs[${Idx}]}${Delimiter}RV=${RV}"
+            echo -e "ERROR${Delimiter}defaults write '${UserPreferencesFQPN}/${SettingFile}' '${SettingName}' '${SettingType}' '${SettingValue}' failed${Delimiter}RC=${RCs[${Idx}]}${Delimiter}RV=${RV}" >&2
             RC=$((RC||RCs[${Idx}]))
           fi
         fi
@@ -1421,7 +1544,7 @@ setLoginWindowSettings() {
           if ((RC == SUCCESS)); then
             echo -n "ok, "
           else
-            echo -e "ERROR${Delimiter}mkdir -p '${UserPreferencesFQPN}' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}"
+            echo -e "ERROR${Delimiter}mkdir -p '${UserPreferencesFQPN}' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}" >&2
             EC=$((EC||RC))
           fi
         fi
@@ -1438,17 +1561,17 @@ setLoginWindowSettings() {
               if ((RCs[${Idx}] == SUCCESS)); then
                 echo -n "ok"
               else
-                echo -e "ERROR${Delimiter}chown -R '${dsclUniqueID}:${dsclPrimaryGroupID}' '${SettingFile}' failed${Delimiter}RC=${RCs[${Idx}]}${Delimiter}RV=${RV}"
+                echo -e "ERROR${Delimiter}chown -R '${dsclUniqueID}:${dsclPrimaryGroupID}' '${SettingFile}' failed${Delimiter}RC=${RCs[${Idx}]}${Delimiter}RV=${RV}" >&2
                 RC=$((RC||RCs[${Idx}]))
               fi
             else
-              echo -e "ERROR${Delimiter}defaults write '${SettingFile}' '${SettingName}' '${SettingType}' '${SettingValue}' failed${Delimiter}RC=${RCs[${Idx}]}${Delimiter}RV=${RV}"
+              echo -e "ERROR${Delimiter}defaults write '${SettingFile}' '${SettingName}' '${SettingType}' '${SettingValue}' failed${Delimiter}RC=${RCs[${Idx}]}${Delimiter}RV=${RV}" >&2
               RC=$((RC||RCs[${Idx}]))
             fi
           done <<<"${LoginWindowSettings[${Idx}]}"
         done
 
-        if [[ "${User}" == "${LoggedInUser}" ]]; then
+        if [[ "${ConsoleUsers[@]}" =~ (^| )${User}\| ]]; then
           echo -n ", Kill preferences cache process ... "
           RV="$(pkill -0 -U ${dsclUniqueID} -f "^/usr/sbin/cfprefsd agent$" && \
                 pkill -U ${dsclUniqueID} -f "^/usr/sbin/cfprefsd agent$" || \
@@ -1456,7 +1579,7 @@ setLoginWindowSettings() {
           if ((RC == SUCCESS)); then
             echo -n "ok"
           else
-            echo -e "ERROR${Delimiter}pkill -U ${dsclUniqueID} -f '^/usr/sbin/cfprefsd agent\$' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}"
+            echo -e "ERROR${Delimiter}pkill -U ${dsclUniqueID} -f '^/usr/sbin/cfprefsd agent\$' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}" >&2
             EC=$((EC||RC))
           fi
           echo -n ", Kill SystemUIServer process ... "
@@ -1466,7 +1589,7 @@ setLoginWindowSettings() {
           if ((RC == SUCCESS)); then
             echo -n "ok"
           else
-            echo -e "ERROR${Delimiter}pkill -f '^/System/Library/CoreServices/SystemUIServer.app/Contents/MacOS/SystemUIServer\$' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}"
+            echo -e "ERROR${Delimiter}pkill -f '^/System/Library/CoreServices/SystemUIServer.app/Contents/MacOS/SystemUIServer\$' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}" >&2
             EC=$((EC||RC))
           fi
         fi
@@ -1482,7 +1605,7 @@ setLoginWindowSettings() {
       if ((RC == 56)); then
         echo -e "WARNING${Delimiter}${User} via dscl not found${Delimiter}RC=${RC}${Delimiter}RV=${RV}"
       else
-        echo -e "ERROR${Delimiter}dscl . read ${UsersFQPN}/${User} NFSHomeDirectory PrimaryGroupID RealName UniqueID failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}"
+        echo -e "ERROR${Delimiter}dscl . read ${UsersFQPN}/${User} NFSHomeDirectory PrimaryGroupID RealName UniqueID failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}" >&2
         EC=$((EC||RC))
       fi
     fi
@@ -1496,7 +1619,7 @@ setLoginWindowSettings() {
       echo -n "Create '${UserPreferencesFQPN}' ... "
       RV="$(mkdir -p "${UserPreferencesFQPN}" 2>&1)"; RC=${?}
       if ((RC != SUCCESS)); then
-        echo -e "ERROR${Delimiter}mkdir -p '${UserPreferencesFQPN}' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}"
+        echo -e "ERROR${Delimiter}mkdir -p '${UserPreferencesFQPN}' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}" >&2
         EC=$((EC||RC))
       fi
     fi
@@ -1512,7 +1635,7 @@ setLoginWindowSettings() {
           if ((RCs[${Idx}] == SUCCESS)); then
             echo -n "ok"
           else
-            echo -e "ERROR${Delimiter}defaults write '${UserPreferencesFQPN}/${SettingFile}' '${SettingName}' '${SettingType}' '${SettingValue}' failed${Delimiter}RC=${RCs[${Idx}]}${Delimiter}RV=${RV}"
+            echo -e "ERROR${Delimiter}defaults write '${UserPreferencesFQPN}/${SettingFile}' '${SettingName}' '${SettingType}' '${SettingValue}' failed${Delimiter}RC=${RCs[${Idx}]}${Delimiter}RV=${RV}" >&2
             RC=$((RC||RCs[${Idx}]))
           fi
         fi
@@ -1608,7 +1731,7 @@ setUserSettings() {
           if ((RC == SUCCESS)); then
             echo -n "ok, "
           else
-            echo -e "ERROR${Delimiter}mkdir -p '${UserPreferencesFQPN}' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}"
+            echo -e "ERROR${Delimiter}mkdir -p '${UserPreferencesFQPN}' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}" >&2
             EC=$((EC||RC))
           fi
         fi
@@ -1622,7 +1745,7 @@ setUserSettings() {
             if ((RCs[${Idx}] == SUCCESS)); then
               echo -n "ok"
             else
-              echo -e "ERROR${Delimiter}defaults write '${SetupAssistantFQFN}' '${SettingName}' '${SettingType}' '${SettingValue}' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}"
+              echo -e "ERROR${Delimiter}defaults write '${SetupAssistantFQFN}' '${SettingName}' '${SettingType}' '${SettingValue}' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}" >&2
               RC=$((RC||RCs[${Idx}]))
             fi
           done <<<"${SetupAssistantSettings[${Idx}]}"
@@ -1636,7 +1759,7 @@ setUserSettings() {
             if ((RCs[${Idx}] == SUCCESS)); then
               echo -n "ok"
             else
-              echo -e "ERROR${Delimiter}defaults write '${loginwindowFQFN}' '${SettingName}' '${SettingType}' '${SettingValue}' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}"
+              echo -e "ERROR${Delimiter}defaults write '${loginwindowFQFN}' '${SettingName}' '${SettingType}' '${SettingValue}' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}" >&2
               RC=$((RC||RCs[${Idx}]))
             fi
           done <<<"${loginwindowSettings[${Idx}]}"
@@ -1647,7 +1770,7 @@ setUserSettings() {
         if ((RC == SUCCESS)); then
           echo -n "ok, "
         else
-          echo -e "ERROR${Delimiter}chown -R '${dsclUniqueID}:${dsclPrimaryGroupID}' '${UserPreferencesFQPN}' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}"
+          echo -e "ERROR${Delimiter}chown -R '${dsclUniqueID}:${dsclPrimaryGroupID}' '${UserPreferencesFQPN}' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}" >&2
           EC=$((EC||RC))
         fi
         if ((RC == SUCCESS)); then
@@ -1661,7 +1784,7 @@ setUserSettings() {
       if ((RC == 56)); then
         echo -e "WARNING${Delimiter}${User} via dscl not found${Delimiter}RC=${RC}${Delimiter}RV=${RV}"
       else
-        echo -e "ERROR${Delimiter}dscl . read ${UsersFQPN}/${User} NFSHomeDirectory PrimaryGroupID RealName UniqueID failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}"
+        echo -e "ERROR${Delimiter}dscl . read ${UsersFQPN}/${User} NFSHomeDirectory PrimaryGroupID RealName UniqueID failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}" >&2
         EC=$((EC||RC))
       fi
     fi
@@ -1677,7 +1800,7 @@ setUserSettings() {
       echo -n "Create '${UserPreferencesFQPN}' ... "
       RV="$(mkdir -p "${UserPreferencesFQPN}" 2>&1)"; RC=${?}
       if ((RC != SUCCESS)); then
-        echo -e "ERROR${Delimiter}mkdir -p '${UserPreferencesFQPN}' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}"
+        echo -e "ERROR${Delimiter}mkdir -p '${UserPreferencesFQPN}' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}" >&2
         EC=$((EC||RC))
       fi
     fi
@@ -1691,7 +1814,7 @@ setUserSettings() {
         if ((RCs[${Idx}] == SUCCESS)); then
           echo -n "ok"
         else
-          echo -e "ERROR${Delimiter}defaults write '${SetupAssistantFQFN}' '${SettingName}' '${SettingType}' '${SettingValue}' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}"
+          echo -e "ERROR${Delimiter}defaults write '${SetupAssistantFQFN}' '${SettingName}' '${SettingType}' '${SettingValue}' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}" >&2
           RC=$((RC||RCs[${Idx}]))
         fi
       done <<<"${SetupAssistantSettings[${Idx}]}"
@@ -1705,7 +1828,7 @@ setUserSettings() {
         if ((RCs[${Idx}] == SUCCESS)); then
           echo -n "ok"
         else
-          echo -e "ERROR${Delimiter}defaults write '${loginwindowFQFN}' '${SettingName}' '${SettingType}' '${SettingValue}' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}"
+          echo -e "ERROR${Delimiter}defaults write '${loginwindowFQFN}' '${SettingName}' '${SettingType}' '${SettingValue}' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}" >&2
           RC=$((RC||RCs[${Idx}]))
         fi
       done <<<"${loginwindowSettings[${Idx}]}"
@@ -1721,7 +1844,7 @@ setUserSettings() {
   if ((RC == SUCCESS)); then
     echo -n "ok"
   else
-    echo -e "ERROR${Delimiter}touch '${AppleSetupDoneFQFN}' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}"
+    echo -e "ERROR${Delimiter}touch '${AppleSetupDoneFQFN}' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}" >&2
     EC=$((EC||RC))
   fi
 
@@ -1750,7 +1873,7 @@ setMunkiSettings() {
   if ((RC == SUCCESS)); then
     echo -n "ok"
   else
-    echo -e "ERROR${Delimiter}defaults write FollowHTTPRedirects '${ManagedInstallsPlistFQFN}' -string 'all' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}"
+    echo -e "ERROR${Delimiter}defaults write FollowHTTPRedirects '${ManagedInstallsPlistFQFN}' -string 'all' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}" >&2
     EC=$((EC||RC))
   fi
 
@@ -1759,7 +1882,7 @@ setMunkiSettings() {
   if ((RC == SUCCESS)); then
     echo -n ", ok"
   else
-    echo -e "ERROR${Delimiter}touch '${MunkiStartupFileFQFN}' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}"
+    echo -e "ERROR${Delimiter}touch '${MunkiStartupFileFQFN}' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}" >&2
     EC=$((EC||RC))
   fi
 
@@ -1781,7 +1904,7 @@ enableAssistiveDevices() {
   if ((RC == SUCCESS)); then
     echo -n "ok"
   else
-    echo -e "ERROR${Delimiter}touch '${AccessibilityAPIEnabledFQFN}' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}"
+    echo -e "ERROR${Delimiter}touch '${AccessibilityAPIEnabledFQFN}' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}" >&2
     EC=$((EC||RC))
   fi
 
@@ -1790,7 +1913,7 @@ enableAssistiveDevices() {
   if ((RC == SUCCESS)); then
     echo -n "ok"
   else
-    echo -e "ERROR${Delimiter}chmod 444 '${AccessibilityAPIEnabledFQFN}' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}"
+    echo -e "ERROR${Delimiter}chmod 444 '${AccessibilityAPIEnabledFQFN}' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}" >&2
     EC=$((EC||RC))
   fi
 
@@ -2064,7 +2187,7 @@ EOXML
       if [[ ${RCs[${Idx}]} -eq ${SUCCESS} && "${RV}" == "YES (0)" ]]; then
         echo -n "ok"
       else
-        echo -e "ERROR${Delimiter}security authorizationdb write '${SettingName}' '${SettingPermission}' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}"
+        echo -e "ERROR${Delimiter}security authorizationdb write '${SettingName}' '${SettingPermission}' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}" >&2
         RC=$((RC||RCs[${Idx}]))
       fi
     done <<<"${authorizationdbSettings[${Idx}]}"
@@ -2086,7 +2209,7 @@ setGlobalUserSettings() {
   local SettingsDescription=""
   local UserPreferencesFQPN=""
   local UserTemplate=""
-  local User=""
+  local LocalUser=""
   local -i Idx=0
   local -i RC=0
   local -ia RCs=()
@@ -2095,130 +2218,73 @@ setGlobalUserSettings() {
 
   echo "INFO${Delimiter}Set global settings for users"
 
-  for User in "${LocalUsers[@]}"; do
-    RV="$(dscl . read ${UsersFQPN}/${User} NFSHomeDirectory PrimaryGroupID RealName UniqueID 2>&1)"; RC=${?}
-    if ((RC == SUCCESS)); then
-      eval $(echo "${RV}" |\
-             awk -v PrefixOutput="${DsclPrefix}" '
-               BEGIN {
-                 NFSHomeDirectory=""
-                 PrimaryGroupID=""
-                 RealNameFound=0
-                 RealName=""
-                 UniqueID=""
-                 }
-               function getRealNameFromPos(Position) {
-                 for(FieldNr=Position; FieldNr <= NF; FieldNr++) {
-                   RealName = (RealName == "" ? "" : RealName " ") $FieldNr
-                   }
-                 }
-               RealNameFound == 1 {
-                 getRealNameFromPos(1)
-                 RealNameFound=0
-                 }
-               $1 == "RealName:" {
-                 if(NF > 1) {
-                   getRealNameFromPos(2)
-                   }
-                 else {
-                   RealNameFound=1
-                   }
-                 }
-               $1 == "NFSHomeDirectory:" {
-                 NFSHomeDirectory=$2
-                 }
-               $1 == "PrimaryGroupID:" {
-                 PrimaryGroupID=$2
-                 }
-               $1 == "UniqueID:" {
-                 UniqueID=$2
-                 }
-               END {
-                 if (NFSHomeDirectory != "" && PrimaryGroupID != "" && RealName != "" && UniqueID != "") {
-                   printf("declare -i %sPrimaryGroupID=%s; %sNFSHomeDirectory=%c%s%c; %sRealName=%c%s%c; declare -i %sUniqueID=%s", PrefixOutput, PrimaryGroupID, PrefixOutput, 34, NFSHomeDirectory, 34, PrefixOutput, 34, RealName, 34, PrefixOutput, UniqueID)
-                   exit 0
-                   }
-                 else {
-                   exit 1
-                   }
-                 }
-           '); RC=${?}
-      dsclNFSHomeDirectory="${dsclNFSHomeDirectory/%\//}"
-      if ((RC == SUCCESS)) && [[ -n "${dsclUniqueID}" && -n "${dsclPrimaryGroupID}" ]]; then
-        echo -n "Process ${User} ... "
+  for LocalUser in "${LocalUsers[@]}"; do
+    LocalUserRealName="$(readDS --account="${LocalUser}" --key="RealName")"; ((RC+=${?}))
+    LocalUserUniqueId=$(readDS --account="${LocalUser}" --key="UniqueID"); ((RC+=${?}))
+    LocalUserPrimaryGroupId=$(readDS --account="${LocalUser}" --key="PrimaryGroupID"); ((RC+=${?}))
+    LocalUserHome="$(readDS --account="${LocalUser}" --key="NFSHomeDirectory")"; ((RC+=${?}));
+    LocalUserHome="${LocalUserHome/%\//}"
+    if ((RC == SUCCESS)) && [[ -n "${LocalUserUniqueId}" && -n "${LocalUserPrimaryGroupId}" ]]; then
+      echo -n "Process ${LocalUser} ... "
 
-        if [[ "${User}" == "${LoggedInUser}" ]]; then
-          RC=0
-          echo -n ", Kill system preferences app ... "
-          RV="$(pkill -0 -U ${dsclUniqueID} -f "^/Applications/System Preferences.app/Contents/MacOS/System Preferences$" && \
-                pkill -U ${dsclUniqueID} -f "^/Applications/System Preferences.app/Contents/MacOS/System Preferences$" || \
-                : 2>&1)"; RC=${?}
-          if ((RC == SUCCESS)); then
-            echo -n "ok"
-          else
-            echo -e "ERROR${Delimiter}pkill -U ${dsclUniqueID} -f '^/Applications/System Preferences.app/Contents/MacOS/System Preferences\$' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}"
-            EC=$((EC||RC))
-          fi
-          RC=0
-          echo -n ", Kill preferences cache process ... "
-          RV="$(pkill -0 -U ${dsclUniqueID} -f "^/usr/sbin/cfprefsd agent$" && \
-                pkill -U ${dsclUniqueID} -f "^/usr/sbin/cfprefsd agent$" || \
-                : 2>&1)"; RC=${?}
-          if ((RC == SUCCESS)); then
-            echo -n "ok"
-          else
-            echo -e "ERROR${Delimiter}pkill -U ${dsclUniqueID} -f '^/usr/sbin/cfprefsd agent\$' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}"
-            EC=$((EC||RC))
-          fi
+set -x
+      if [[ "${ConsoleUsers[@]}" =~ ${LocalUser} ]]; then
+        echo -n ", Kill system preferences app ... "
+        RV="$(killProcess "/Applications/System Preferences.app/Contents/MacOS/System Preferences" 2>&1)"; RC=${?}
+        if ((RC == SUCCESS)); then
+          echo -n "ok"
+        else
+          echo -e "ERROR${Delimiter}pkill -U ${LocalUserUniqueId} -f '^/Applications/System Preferences.app/Contents/MacOS/System Preferences\$' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}" >&2
+          EC=$((EC||RC))
         fi
-
         RC=0
-        for ((Idx=0; Idx < ${#GlobalUserPreferencesSettings[@]}; Idx++)); do
-          while IFS="${Delimiter}" read -r SettingFile SettingName SettingType SettingValue SettingsDescription; do
-            SettingFile="${SettingFile/#~/${dsclNFSHomeDirectory}}"
-            SettingFileFQPN="${SettingFile%/*}"
-            if [[ ! -d "${SettingFileFQPN}" ]]; then
-              echo -n "Create '${SettingFileFQPN}' ... "
-              RV="$(mkdir -p "${SettingFileFQPN}" 2>&1)"; RC=${?}
-              if ((RC == SUCCESS)); then
-                echo -n "ok, "
-              else
-                echo -e "ERROR${Delimiter}mkdir -p '${SettingFileFQPN}' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}"
-                EC=$((EC||RC))
-              fi
-            fi
-            # ((Idx > 0)) && echo -n ", "
-            echo -n "${SettingsDescription:-${SettingName}}: "
-            RV="$(defaults write "${SettingFile}" "${SettingName}" "${SettingType}" "${SettingValue}" 2>&1)"; RCs[${Idx}]=${?}
-            if ((RCs[Idx] == SUCCESS)); then
-              RV="$(chown -R "${dsclUniqueID}:${dsclPrimaryGroupID}" "${SettingFile}" 2>&1)"; RCs[${Idx}]=${?}
-              if ((RCs[Idx] == SUCCESS)); then
-                echo -n "ok, "
-              else
-                echo -e "ERROR${Delimiter}chown -R '${dsclUniqueID}:${dsclPrimaryGroupID}' '${SettingFile}' failed${Delimiter}RC=${RCs[${Idx}]}${Delimiter}RV=${RV}"
-                RC=$((RC||RCs[Idx]))
-              fi
+        echo -n ", Kill preferences cache process ... "
+        RV="$(killProcess "/usr/sbin/cfprefsd agent" 2>&1)"; RC=${?}
+        if ((RC == SUCCESS)); then
+          echo -n "ok"
+        fi
+        EC=$((EC||RC))
+      fi
+set +x
+      RC=0
+      for ((Idx=0; Idx < ${#GlobalUserPreferencesSettings[@]}; Idx++)); do
+        while IFS="${Delimiter}" read -r SettingFile SettingName SettingType SettingValue SettingsDescription; do
+          SettingFile="${SettingFile/#~/${LocalUserHome}}"
+          SettingFileFQPN="${SettingFile%/*}"
+          if [[ ! -d "${SettingFileFQPN}" ]]; then
+            echo -n "Create '${SettingFileFQPN}' ... "
+            RV="$(mkdir -p "${SettingFileFQPN}" 2>&1)"; RC=${?}
+            if ((RC == SUCCESS)); then
+              echo -n "ok, "
             else
-              echo -e "ERROR${Delimiter}defaults write '${SettingFile}' '${SettingName}' '${SettingType}' '${SettingValue}' failed${Delimiter}RC=${RCs[${Idx}]}${Delimiter}RV=${RV}"
+              echo -e "ERROR${Delimiter}mkdir -p '${SettingFileFQPN}' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}" >&2
+              EC=$((EC||RC))
+            fi
+          fi
+          # ((Idx > 0)) && echo -n ", "
+          echo -n "${SettingsDescription:-${SettingName}}: "
+          RV="$(defaults write "${SettingFile}" "${SettingName}" "${SettingType}" "${SettingValue}" 2>&1)"; RCs[${Idx}]=${?}
+          if ((RCs[Idx] == SUCCESS)); then
+            RV="$(chown -R "${LocalUserUniqueId}:${LocalUserPrimaryGroupId}" "${SettingFile}" 2>&1)"; RCs[${Idx}]=${?}
+            if ((RCs[Idx] == SUCCESS)); then
+              echo -n "ok, "
+            else
+              echo -e "ERROR${Delimiter}chown -R '${LocalUserUniqueId}:${LocalUserPrimaryGroupId}' '${SettingFile}' failed${Delimiter}RC=${RCs[${Idx}]}${Delimiter}RV=${RV}" >&2
               RC=$((RC||RCs[Idx]))
             fi
-          done <<<"${GlobalUserPreferencesSettings[${Idx}]}"
-        done
+          else
+            echo -e "ERROR${Delimiter}defaults write '${SettingFile}' '${SettingName}' '${SettingType}' '${SettingValue}' failed${Delimiter}RC=${RCs[${Idx}]}${Delimiter}RV=${RV}" >&2
+            RC=$((RC||RCs[Idx]))
+          fi
+        done <<<"${GlobalUserPreferencesSettings[${Idx}]}"
+      done
 
-        if ((RC == SUCCESS)); then
-          echo -e "\nSUCCESS"
-        fi
-        EC=$((EC||RC))
-      else
-        echo -e "WARNING${Delimiter}UniqueID (${dsclUniqueID}) and PrimaryGroupID (${dsclPrimaryGroupID}) from dscl are empty, maybe not a real user?"
+      if ((RC == SUCCESS)); then
+        echo -e "\nSUCCESS"
       fi
+      EC=$((EC||RC))
     else
-      if ((RC == 56)); then
-        echo -e "WARNING${Delimiter}${User} via dscl not found${Delimiter}RC=${RC}${Delimiter}RV=${RV}"
-      else
-        echo -e "ERROR${Delimiter}dscl . read ${UsersFQPN}/${User} NFSHomeDirectory PrimaryGroupID RealName UniqueID failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}"
-        EC=$((EC||RC))
-      fi
+      echo -e "WARNING${Delimiter}UniqueID (${LocalUserUniqueId}) and PrimaryGroupID (${LocalUserPrimaryGroupId}) from dscl are empty, maybe not a real user?"
     fi
   done
 
@@ -2230,7 +2296,7 @@ setGlobalUserSettings() {
       echo -n "Create '${UserPreferencesFQPN}' ... "
       RV="$(mkdir -p "${UserPreferencesFQPN}" 2>&1)"; RC=${?}
       if ((RC != SUCCESS)); then
-        echo -e "ERROR${Delimiter}mkdir -p '${UserPreferencesFQPN}' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}"
+        echo -e "ERROR${Delimiter}mkdir -p '${UserPreferencesFQPN}' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}" >&2
         EC=$((EC||RC))
       fi
     fi
@@ -2244,7 +2310,7 @@ setGlobalUserSettings() {
         if ((RCs[Idx] == SUCCESS)); then
           echo -n "ok"
         else
-          echo -e "ERROR${Delimiter}defaults write '${UserPreferencesFQPN}/${SettingFile}' '${SettingName}' '${SettingType}' '${SettingValue}' failed${Delimiter}RC=${RCs[${Idx}]}${Delimiter}RV=${RV}"
+          echo -e "ERROR${Delimiter}defaults write '${UserPreferencesFQPN}/${SettingFile}' '${SettingName}' '${SettingType}' '${SettingValue}' failed${Delimiter}RC=${RCs[${Idx}]}${Delimiter}RV=${RV}" >&2
           RC=$((RC||RCs[Idx]))
         fi
       done <<<"${GlobalUserPreferencesSettings[${Idx}]}"
@@ -2323,7 +2389,7 @@ setScreenSettings() {
       if ((RC == SUCCESS)) && [[ -n "${dsclUniqueID}" && -n "${dsclPrimaryGroupID}" ]]; then
         echo -n "Process ${User} ... "
 
-        if [[ "${User}" == "${LoggedInUser}" ]]; then
+        if [[ "${ConsoleUsers[@]}" =~ (^| )${User}\| ]]; then
           echo -n ", Kill preferences cache process ... "
           RV="$(pkill -0 -U ${dsclUniqueID} -f "^/usr/sbin/cfprefsd agent$" && \
                 pkill -U ${dsclUniqueID} -f "^/usr/sbin/cfprefsd agent$" || \
@@ -2331,7 +2397,7 @@ setScreenSettings() {
           if ((RC == SUCCESS)); then
             echo -n "ok"
           else
-            echo -e "ERROR${Delimiter}pkill -U ${dsclUniqueID} -f '^/usr/sbin/cfprefsd agent\$' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}"
+            echo -e "ERROR${Delimiter}pkill -U ${dsclUniqueID} -f '^/usr/sbin/cfprefsd agent\$' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}" >&2
             EC=$((EC||RC))
           fi
           echo -n ", Kill SystemUIServer process ... "
@@ -2341,7 +2407,7 @@ setScreenSettings() {
           if ((RC == SUCCESS)); then
             echo -n "ok"
           else
-            echo -e "ERROR${Delimiter}pkill -f '^/System/Library/CoreServices/SystemUIServer.app/Contents/MacOS/SystemUIServer\$' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}"
+            echo -e "ERROR${Delimiter}pkill -f '^/System/Library/CoreServices/SystemUIServer.app/Contents/MacOS/SystemUIServer\$' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}" >&2
             EC=$((EC||RC))
           fi
         fi
@@ -2357,7 +2423,7 @@ setScreenSettings() {
               if ((RC == SUCCESS)); then
                 echo -n "ok, "
               else
-                echo -e "ERROR${Delimiter}mkdir -p '${SettingFileFQPN}' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}"
+                echo -e "ERROR${Delimiter}mkdir -p '${SettingFileFQPN}' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}" >&2
                 EC=$((EC||RC))
               fi
             fi
@@ -2369,11 +2435,11 @@ setScreenSettings() {
               if ((RCs[Idx] == SUCCESS)); then
                 echo -n "ok, "
               else
-                echo -e "ERROR${Delimiter}chown -R '${dsclUniqueID}:${dsclPrimaryGroupID}' '${SettingFile}' failed${Delimiter}RC=${RCs[${Idx}]}${Delimiter}RV=${RV}"
+                echo -e "ERROR${Delimiter}chown -R '${dsclUniqueID}:${dsclPrimaryGroupID}' '${SettingFile}' failed${Delimiter}RC=${RCs[${Idx}]}${Delimiter}RV=${RV}" >&2
                 RC=$((RC||RCs[Idx]))
               fi
             else
-              echo -e "ERROR${Delimiter}defaults write '${SettingFile}' '${SettingName}' '${SettingType}' '${SettingValue}' failed${Delimiter}RC=${RCs[${Idx}]}${Delimiter}RV=${RV}"
+              echo -e "ERROR${Delimiter}defaults write '${SettingFile}' '${SettingName}' '${SettingType}' '${SettingValue}' failed${Delimiter}RC=${RCs[${Idx}]}${Delimiter}RV=${RV}" >&2
               RC=$((RC||RCs[Idx]))
             fi
           done <<<"${ScreenSettings[${Idx}]}"
@@ -2390,7 +2456,7 @@ setScreenSettings() {
       if ((RC == 56)); then
         echo -e "WARNING${Delimiter}${User} via dscl not found${Delimiter}RC=${RC}${Delimiter}RV=${RV}"
       else
-        echo -e "ERROR${Delimiter}dscl . read ${UsersFQPN}/${User} NFSHomeDirectory PrimaryGroupID RealName UniqueID failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}"
+        echo -e "ERROR${Delimiter}dscl . read ${UsersFQPN}/${User} NFSHomeDirectory PrimaryGroupID RealName UniqueID failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}" >&2
         EC=$((EC||RC))
       fi
     fi
@@ -2404,7 +2470,7 @@ setScreenSettings() {
       echo -n "Create '${UserPreferencesFQPN}' ... "
       RV="$(mkdir -p "${UserPreferencesFQPN}" 2>&1)"; RC=${?}
       if ((RC != SUCCESS)); then
-        echo -e "ERROR${Delimiter}mkdir -p '${UserPreferencesFQPN}' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}"
+        echo -e "ERROR${Delimiter}mkdir -p '${UserPreferencesFQPN}' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}" >&2
         EC=$((EC||RC))
       fi
     fi
@@ -2418,7 +2484,7 @@ setScreenSettings() {
         if ((RCs[${Idx}] == SUCCESS)); then
           echo -n "ok"
         else
-          echo -e "ERROR${Delimiter}defaults write '${UserPreferencesFQPN}/${SettingFile}' '${SettingName}' '${SettingType}' '${SettingValue}' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}"
+          echo -e "ERROR${Delimiter}defaults write '${UserPreferencesFQPN}/${SettingFile}' '${SettingName}' '${SettingType}' '${SettingValue}' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}" >&2
           RC=$((RC||RCs[${Idx}]))
         fi
       done <<<"${ScreenSettings[${Idx}]}"
@@ -2519,7 +2585,7 @@ disableWhatsNewNotification() {
             if ((RC == SUCCESS)); then
               echo -n "ok, "
             else
-              echo -e "ERROR${Delimiter}mkdir -p '${UserPreferencesFQPN}' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}"
+              echo -e "ERROR${Delimiter}mkdir -p '${UserPreferencesFQPN}' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}" >&2
               EC=$((EC||RC))
             fi
           fi
@@ -2563,17 +2629,17 @@ disableWhatsNewNotification() {
             while IFS= read -r Id; do
               RV="$(defaults write "${PTouristdPlistFQFN}" "seed-notificationDueDate-${Id}" -date "${SeedDate}" 2>&1)"; RC=${?}
               if ((RC != SUCCESS)); then
-                echo -e "ERROR${Delimiter}defaults write '${PTouristdPlistFQFN}' 'seed-notificationDueDate-${Id}' -date '${SeedDate}' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}"
+                echo -e "ERROR${Delimiter}defaults write '${PTouristdPlistFQFN}' 'seed-notificationDueDate-${Id}' -date '${SeedDate}' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}" >&2
                 EC=$((EC||RC))
               fi
               RV="$(defaults write "${PTouristdPlistFQFN}" "seed-numNotifications-${Id}" -string "1" 2>&1)"; RC=${?}
               if ((RC != SUCCESS)); then
-                echo -e "ERROR${Delimiter}defaults write '${PTouristdPlistFQFN}' 'seed-numNotifications-${Id}' -date '${SeedDate}' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}"
+                echo -e "ERROR${Delimiter}defaults write '${PTouristdPlistFQFN}' 'seed-numNotifications-${Id}' -date '${SeedDate}' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}" >&2
                 EC=$((EC||RC))
               fi
               RV="$(defaults write "${PTouristdPlistFQFN}" "seed-viewed-${Id}" -date "${SeedDate}" 2>&1)"; RC=${?}
               if ((RC != SUCCESS)); then
-                echo -e "ERROR${Delimiter}defaults write '${PTouristdPlistFQFN}' 'seed-viewed-${Id}' -date '${SeedDate}' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}"
+                echo -e "ERROR${Delimiter}defaults write '${PTouristdPlistFQFN}' 'seed-viewed-${Id}' -date '${SeedDate}' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}" >&2
                 EC=$((EC||RC))
               fi
             done < <(xmllint -xpath "//key[following-sibling::*[1][self::dict[key = 'hasBeenViewed']]]" "${ASTouristdPlistFQFN}" |\
@@ -2582,7 +2648,7 @@ disableWhatsNewNotification() {
               echo -n "Copy '${PTouristdPlistFQFN}' to '${TempFQPN}' ... "
               RV="$(cp "${PTouristdPlistFQFN}" "${TempFQPN}/${TouristdPlistFN}" 2>&1)"; RC=${?}
               if ((RC != SUCCESS)); then
-                echo -e "ERROR${Delimiter}cp '${PTouristdPlistFQFN}' '${TempFQPN}/${TouristdPlistFN}' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}"
+                echo -e "ERROR${Delimiter}cp '${PTouristdPlistFQFN}' '${TempFQPN}/${TouristdPlistFN}' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}" >&2
                 EC=$((EC||RC))
               fi
             fi
@@ -2591,7 +2657,7 @@ disableWhatsNewNotification() {
           if ((RC == SUCCESS)); then
             echo -n "ok"
           else
-            echo -e "ERROR${Delimiter}chown -R '${dsclUniqueID}:${dsclPrimaryGroupID}' '${PTouristdPlistFQFN}' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}"
+            echo -e "ERROR${Delimiter}chown -R '${dsclUniqueID}:${dsclPrimaryGroupID}' '${PTouristdPlistFQFN}' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}" >&2
             EC=$((EC||RC))
           fi
 
@@ -2609,7 +2675,7 @@ disableWhatsNewNotification() {
       if ((RC == 56)); then
         echo -e "WARNING${Delimiter}${User} via dscl not found${Delimiter}RC=${RC}${Delimiter}RV=${RV}"
       else
-        echo -e "ERROR${Delimiter}dscl . read ${UsersFQPN}/${User} NFSHomeDirectory PrimaryGroupID RealName UniqueID failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}"
+        echo -e "ERROR${Delimiter}dscl . read ${UsersFQPN}/${User} NFSHomeDirectory PrimaryGroupID RealName UniqueID failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}" >&2
         EC=$((EC||RC))
       fi
     fi
@@ -2625,7 +2691,7 @@ disableWhatsNewNotification() {
         echo -n "Create '${UserPreferencesFQPN}' ... "
         RV="$(mkdir -p "${UserPreferencesFQPN}" 2>&1)"; RC=${?}
         if ((RC != SUCCESS)); then
-          echo -e "ERROR${Delimiter}mkdir -p '${UserPreferencesFQPN}' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}"
+          echo -e "ERROR${Delimiter}mkdir -p '${UserPreferencesFQPN}' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}" >&2
           EC=$((EC||RC))
         fi
       fi
@@ -2634,7 +2700,7 @@ disableWhatsNewNotification() {
       if [[ -f "${TempFQPN}/${TouristdPlistFN}" && ! -f "${PTouristdPlistFQFN}" ]]; then
         RV="$(cp "${TempFQPN}/${TouristdPlistFN}" "${PTouristdPlistFQFN}" 2>&1)"; RC=${?}
         if ((RC != SUCCESS)); then
-          echo -e "ERROR${Delimiter}cp '${TempFQPN}/${TouristdPlistFN}' '${PTouristdPlistFQFN}' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}"
+          echo -e "ERROR${Delimiter}cp '${TempFQPN}/${TouristdPlistFN}' '${PTouristdPlistFQFN}' failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}" >&2
           EC=$((EC||RC))
         fi
       fi
@@ -2661,7 +2727,7 @@ func() {
   if ((RC == SUCCESS)); then
     echo -n "ok"
   else
-    echo -e "ERROR${Delimiter}: failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}"
+    echo -e "ERROR${Delimiter}: failed${Delimiter}RC=${RC}${Delimiter}RV=${RV}" >&2
     EC=$((EC||RC))
   fi
 
@@ -2695,19 +2761,17 @@ setPowerSaveSettings # ok
 
 setPrinterSettings # ok
 
-enableARD
+enableARD # ok
 
-enableSSH
+enableSSH # ok
 
-disableBonjourAdvertisement
+disableBonjourAdvertisement # ok
 
-setTerminalSettings
+setTerminalSettings # ok
 
-disableGateKeeper
+disableGateKeeper # ok
 
-disableLocationService
-
-setUserSettings
+disableLocationService # ok
 
 setAuthorizationDBSettings
 
@@ -2728,4 +2792,4 @@ disableWhatsNewNotification
 setAppleLoginWindowSettings # ok
 EOF
 
-enableARD
+setGlobalUserSettings
